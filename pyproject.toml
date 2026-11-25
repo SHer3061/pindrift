@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pindrift"
+version = "0.1.0"
+description = "Continuous drift monitoring for MCP servers and agent skills. Scan once, pin the manifest, detect silent redefinition."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "SHer" }]
+keywords = ["mcp", "security", "supply-chain", "ai-agents", "drift-detection", "rug-pull"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-cov>=4.1"]
+
+[project.scripts]
+pindrift = "pindrift.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/SHer/pindrift"
+Issues = "https://github.com/SHer/pindrift/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pindrift"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
