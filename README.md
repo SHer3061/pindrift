@@ -161,6 +161,25 @@ Planned: config write-back for Streamable HTTP servers, manifest signing so a pi
 
 Contributions and false-positive reports are both welcome — the second kind especially, since every heuristic here is a guess that needs sharpening.
 
+## Working on this repo
+
+[`AGENTS.md`](AGENTS.md) is the operating manual for any coding agent: hard
+constraints, layout, extension recipes, non-goals. `CLAUDE.md` imports it.
+
+[`docs/TASKS.md`](docs/TASKS.md) cuts the open work into tasks with **disjoint file
+ownership**, so several agents can run in parallel worktrees without colliding.
+
+[`docs/DESIGN.md`](docs/DESIGN.md) covers internals and known weaknesses.
+[`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) is the promise about what is and is not
+detected — keep it accurate when behaviour changes.
+
+```bash
+python -m venv .venv
+.venv/Scripts/python -m pip install -e ".[dev]"   # .venv/bin/python on POSIX
+python -m pytest -q
+python examples/demo.py
+```
+
 ## License
 
 MIT
