@@ -22,6 +22,7 @@ from .detect import analyse_text
 from .differ import compare, summarise
 from .discover import ServerSpec, collect
 from .fingerprint import build
+from .hook import SUPPORTED_HOSTS, run_hook
 from .models import (
     SEVERITY_RANK,
     Finding,
@@ -287,6 +288,19 @@ def cmd_watch(args: argparse.Namespace) -> int:
         return last_code
 
 
+def cmd_hook(args: argparse.Namespace) -> int:
+    return run_hook(
+        host=args.host,
+        stream=sys.stdin,
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+        fail_on=Severity(args.fail_on),
+        timeout=args.timeout,
+        root=Path(args.root) if args.root else None,
+        include_project=not args.no_project,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pindrift",
@@ -354,6 +368,26 @@ def build_parser() -> argparse.ArgumentParser:
     watch.add_argument("--probe-all", action="store_true")
     watch.add_argument("--verbose", "-v", action="store_true")
     watch.set_defaults(func=cmd_watch)
+
+    hook = subparsers.add_parser(
+        "hook",
+        aliases=["agent-hook"],
+        help="check one pending tool call before an agent host runs it",
+    )
+    add_common(hook, probe_flag=False)
+    hook.add_argument(
+        "--host",
+        required=True,
+        choices=SUPPORTED_HOSTS,
+        help="agent host producing the hook payload on stdin",
+    )
+    hook.add_argument(
+        "--fail-on",
+        choices=("info", "low", "medium", "high", "critical"),
+        default="high",
+        help="minimum severity that denies the call (default: high)",
+    )
+    hook.set_defaults(func=cmd_hook)
 
     return parser
 
