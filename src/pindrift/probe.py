@@ -55,11 +55,11 @@ def _build_env(spec: ServerSpec) -> dict[str, str]:
     return env
 
 
-def _reader(stream: Any, sink: "queue.Queue[Any]") -> None:
+def _reader(stream: Any, sink: queue.Queue[Any]) -> None:
     try:
         for line in iter(stream.readline, ""):
             sink.put(line)
-    except Exception as exc:  # pragma: no cover - stream teardown races
+    except Exception as exc:  # noqa: BLE001 - any read failure must not kill the thread
         sink.put(exc)
     finally:
         sink.put(None)
@@ -113,7 +113,7 @@ def probe_spec(
     except OSError as exc:
         return None, f"failed to start: {exc}"
 
-    sink: "queue.Queue[Any]" = queue.Queue()
+    sink: queue.Queue[Any] = queue.Queue()
     watcher = threading.Thread(target=_reader, args=(proc.stdout, sink), daemon=True)
     watcher.start()
 

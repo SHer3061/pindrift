@@ -38,9 +38,12 @@ def visible(text: str) -> str:
             out.append(" ")
         elif code < 0x20 or code == 0x7F:
             out.append(f"\\x{code:02x}")
-        elif 0x200B <= code <= 0x200F or 0x202A <= code <= 0x202E:
-            out.append(f"\\u{code:04x}")
-        elif 0x2060 <= code <= 0x2069 or code == 0xFEFF:
+        elif (
+            0x200B <= code <= 0x200F
+            or 0x202A <= code <= 0x202E
+            or 0x2060 <= code <= 0x2069
+            or code == 0xFEFF
+        ):
             out.append(f"\\u{code:04x}")
         elif 0xE0000 <= code <= 0xE007F:
             out.append(f"\\U{code:08x}")

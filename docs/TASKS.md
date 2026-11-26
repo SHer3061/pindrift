@@ -14,7 +14,6 @@ Claim one task per worktree, and respect its file list.
 | T3b pin identity | `models.py`, `store.py`, `discover.py`, `cli.py`, `tests/test_pin_identity.py` | `tests/test_pin_identity.py` |
 | T4 capability | `capability.py`, `tests/test_capability.py` | `tests/fixtures/facet_corpus.jsonl` |
 | T5 output | `report.py`, `tests/test_report.py` | `.github/actions/pindrift/action.yml` |
-| T6 research | — | `docs/RESEARCH-content-provenance.md` |
 
 Anything not listed (models, fingerprint, probe, detect, differ, docs) is shared. If a
 task genuinely needs a shared file, do it as its own small commit first so the others
@@ -22,7 +21,7 @@ rebase onto a stable base.
 
 **Merge order:** T3 and T4 first (leaf behaviour, no cross-dependency), then T5, then
 T1, then T2, then T3b. T3b changes the pin key that T2 and T5 build on, so it lands
-after both. T6 is independent and can land any time.
+after both.
 
 ---
 
@@ -90,7 +89,11 @@ result and lists both clients.
 
 ## T3b — stable pin identity under dedupe
 
-**Why.** `--dedupe` gives the merged server the alphabetically first client's id. Add a
+**Status.** Implemented. Canonical id plus persisted aliases (option 1): the pin file
+gains an `aliases` object, a pin key is treated as an alias of itself for migration,
+and `tests/test_pin_identity.py` covers the acceptance list below.
+
+**Why.** `--dedupe` used to give the merged server the alphabetically first client's id. Add a
 client that sorts earlier and `cursor:foo` becomes `claude-code:foo`: the old pin is
 reported `missing`, the merged server is `new`, and any fingerprint keyed on the id
 (notably T5's SARIF `partialFingerprints`) changes, reopening a CI alert for untouched
@@ -166,22 +169,6 @@ tool, runs `check --format sarif`, uploads the file, and fails on threshold.
 
 **Acceptance.** `tests/test_report.py` validates the document against the SARIF 2.1.0
 required fields (no network, no schema download — assert the shape directly).
-
----
-
-## T6 — research note, no code
-
-**Why.** The second project (AI content-provenance verification) needs its evidence
-chain assembled before any code, and that writing is the part hardest to copy.
-
-**Scope.** `docs/RESEARCH-content-provenance.md`: for each verification signal
-(C2PA manifest chain, Chinese explicit/implicit labelling fields, statistical text
-watermarks, pixel watermarks, metadata-stripped fallback), record what it actually
-proves, what defeats it, who currently implements a third-party-runnable detector, and
-what the three-state verdict should be. Cite primary sources. Explicitly mark where
-detection is impossible rather than weak.
-
-**Files.** `docs/RESEARCH-content-provenance.md` only. Do not touch code in this task.
 
 ---
 

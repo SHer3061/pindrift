@@ -17,9 +17,9 @@ import pytest
 from pindrift import report
 from pindrift.differ import summarise
 from pindrift.models import (
+    SARIF_LEVEL,
     Artifact,
     Finding,
-    SARIF_LEVEL,
     ServerFingerprint,
     ServerResult,
     Severity,

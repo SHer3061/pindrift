@@ -65,6 +65,7 @@ def run(args: list[str], workspace: Path, home: Path) -> subprocess.CompletedPro
         encoding="utf-8",
         errors="replace",
         capture_output=True,
+        check=False,
     )
     print(f"\n$ pindrift {' '.join(args)}")
     if result.stdout.strip():

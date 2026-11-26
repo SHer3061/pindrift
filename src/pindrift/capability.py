@@ -14,8 +14,8 @@ triggered it so a human can audit the call rather than trust it.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 from .models import Severity, ToolManifest
 

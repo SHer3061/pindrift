@@ -64,16 +64,19 @@ INSTRUCTION_PHRASES: tuple[str, ...] = (
 )
 
 SENSITIVE_PATH_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("ssh private key", re.compile(r"\.ssh|id_rsa|id_ed25519", re.I)),
-    ("aws credentials", re.compile(r"\.aws[/\\]credentials|aws_access_key", re.I)),
-    ("dotenv file", re.compile(r"(^|[^\w])\.env\b", re.I)),
-    ("netrc or git credentials", re.compile(r"\.netrc|\.git-credentials", re.I)),
-    ("npm token", re.compile(r"\.npmrc", re.I)),
-    ("browser cookie store", re.compile(r"cookies\.sqlite|Login Data", re.I)),
-    ("keychain or credential store", re.compile(r"keychain|credential manager|secret service", re.I)),
+    ("ssh private key", re.compile(r"\.ssh|id_rsa|id_ed25519", re.IGNORECASE)),
+    ("aws credentials", re.compile(r"\.aws[/\\]credentials|aws_access_key", re.IGNORECASE)),
+    ("dotenv file", re.compile(r"(^|[^\w])\.env\b", re.IGNORECASE)),
+    ("netrc or git credentials", re.compile(r"\.netrc|\.git-credentials", re.IGNORECASE)),
+    ("npm token", re.compile(r"\.npmrc", re.IGNORECASE)),
+    ("browser cookie store", re.compile(r"cookies\.sqlite|Login Data", re.IGNORECASE)),
+    (
+        "keychain or credential store",
+        re.compile(r"keychain|credential manager|secret service", re.IGNORECASE),
+    ),
 )
 
-URL_PATTERN = re.compile(r"https?://[^\s\"'<>)\]}]+", re.I)
+URL_PATTERN = re.compile(r"https?://[^\s\"'<>)\]}]+", re.IGNORECASE)
 ENCODED_BLOB_PATTERN = re.compile(r"[A-Za-z0-9+/]{80,}={0,2}")
 SHORTENER_HOSTS = frozenset(
     {"bit.ly", "tinyurl.com", "t.co", "goo.gl", "is.gd", "ow.ly", "shorturl.at", "cutt.ly"}
@@ -136,9 +139,7 @@ def _is_suspicious_url(url: str) -> bool:
         return True
     if IPV4_HOST.match(host):
         return True
-    if host in SHORTENER_HOSTS:
-        return True
-    return False
+    return host in SHORTENER_HOSTS
 
 
 def analyse_text(text: str) -> ContentRisk:
@@ -211,7 +212,10 @@ def redact_arg(arg: str) -> str:
     """
     if "=" in arg:
         key, _, value = arg.partition("=")
-        if re.search(r"(key|token|secret|passwd|password|credential|auth)", key, re.I) and value:
+        sensitive = re.search(
+            r"(key|token|secret|passwd|password|credential|auth)", key, re.IGNORECASE
+        )
+        if sensitive and value:
             return f"{key}=<redacted:{len(value)}>"
     if re.match(r"^(sk-|ghp_|gho_|github_pat_|xox[baprs]-|AKIA|AIza)", arg):
         return f"<redacted:{len(arg)}>"

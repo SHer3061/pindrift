@@ -7,16 +7,16 @@ from pindrift.fingerprint import build, hash_config, identify_artifact
 
 
 def make_spec(**kwargs) -> ServerSpec:
-    defaults = dict(
-        client="test",
-        name="srv",
-        transport="stdio",
-        command="node",
-        args=["server.js"],
-        env={"TOKEN": "abc"},
-        env_keys=["TOKEN"],
-        source_path="/tmp/mcp.json",
-    )
+    defaults = {
+        "client": "test",
+        "name": "srv",
+        "transport": "stdio",
+        "command": "node",
+        "args": ["server.js"],
+        "env": {"TOKEN": "abc"},
+        "env_keys": ["TOKEN"],
+        "source_path": "/tmp/mcp.json",
+    }
     defaults.update(kwargs)
     return ServerSpec(**defaults)
 

@@ -142,9 +142,7 @@ def main() -> int:
             )
         elif method == "tools/list":
             respond(request_id, {"tools": tools})
-        elif method == "ping":
-            respond(request_id, {})
-        elif request_id is not None:
+        elif method == "ping" or request_id is not None:
             respond(request_id, {})
     return 0
 

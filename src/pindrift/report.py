@@ -126,7 +126,7 @@ def render_text(
         names = ", ".join(r.fingerprint.server_id for r in actionable[:3])
         lines.append(
             palette.paint(
-                f"Review the diff, then re-pin with:  pindrift approve <server>", DIM
+                "Review the diff, then re-pin with:  pindrift approve <server>", DIM
             )
         )
         if len(actionable) <= 3:
@@ -460,7 +460,7 @@ def _partial_fingerprint(rule_id: str, server_id: str, title: str, detail: str) 
     errors) that legitimately change between runs while the finding stays the same.
     Rule, server, title and detail identify the drift.
     """
-    identity = "\x00".join((rule_id, server_id, title, detail))
+    identity = f"{rule_id}\x00{server_id}\x00{title}\x00{detail}"
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 
