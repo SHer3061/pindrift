@@ -49,6 +49,7 @@ Python 3.10+. Zero runtime dependencies.
 ```bash
 pindrift scan              # what MCP servers are configured on this machine?
 pindrift scan --probe      # also ask each server for its tool manifest
+pindrift scan --dedupe     # one row per server, naming every client that configures it
 pindrift pin --all         # record the reviewed state as the trust baseline
 pindrift check             # compare current state against the baseline
 pindrift approve cursor:jira-bridge   # accept the new state, after reviewing the diff
@@ -151,7 +152,18 @@ What `pindrift` does **not** do: sandbox the server, inspect network traffic, de
 
 ## Supported config locations
 
-Claude Desktop, Claude Code (`.claude.json`, `.mcp.json`), Cursor, VS Code and Insiders (`mcp.json`), Windsurf, Gemini CLI, Codex (`config.toml`). Both `mcpServers` and `servers` container shapes, plus project-scoped configs found by walking up to the git root.
+Claude Desktop, Claude Code (`.claude.json`, `.mcp.json`), Cursor, VS Code and Insiders (`mcp.json`), Windsurf, Gemini CLI, Codex (`config.toml`), Cline (VS Code extension `cline_mcp_settings.json` and `~/.cline/mcp.json`), Zed (`context_servers` in user or project settings), JetBrains AI Assistant (`ai/mcp.json` for each installed product, `.idea/mcp.json`) and Continue (JSON blocks under `.continue/mcpServers/` and `~/.continue/config.json`). Both `mcpServers` and `servers` container shapes, plus project-scoped configs found by walking up to the git root.
+
+The same server is often configured in several clients. `--dedupe` fingerprints it once, and the report still names every client:
+
+```
+$ pindrift scan --dedupe
+  claude-code:files  [stdio]
+    clients   claude-code, cursor
+    config    /repo/.mcp.json
+```
+
+Pass `--dedupe` consistently to `pin`, `check`, `approve` and `watch`: the merged server keeps the first client as its id, so a baseline pinned without the flag will not match the deduped id.
 
 ## Status
 

@@ -34,6 +34,23 @@ Modules map one-to-one onto that flow:
 | `store` | read and write the pin file |
 | `report` | text, JSON, SARIF |
 
+## Discovery and dedupe
+
+Discovery is a list of known config paths plus a few directory scans: VS Code
+`globalStorage` for Cline, each installed JetBrains product directory, and
+`.continue/mcpServers/*.json` for Continue. Product and version directory names are
+discovered, not guessed, so an IDE upgrade does not silently drop coverage.
+
+Client formats differ in more than the path. Zed puts servers under `context_servers`
+and has historically nested `command` as `{"path", "args", "env"}`; `_command_parts()`
+normalises that to the same `ServerSpec` every other client produces.
+
+`collect(dedupe=True)` groups specs by a launch key — name, transport, command, args,
+env keys, url and header keys. The first client alphabetically supplies the
+`server_id`; `clients` keeps every client so a report can name them all. Entries with
+the same name but a different launch are deliberately not merged: that difference is
+the drift this tool exists to show.
+
 ## The three fingerprint layers
 
 They answer different questions and fail independently, which is why all three exist.
@@ -121,6 +138,9 @@ through `redact_arg` first.
   local one and says so in its artifact note.
 * Capability inference has both false positives and false negatives; see
   [THREAT-MODEL.md](THREAT-MODEL.md#limits-of-capability-inference).
+* Continue's primary config is `~/.continue/config.yaml`. A YAML parser is not worth
+  a runtime dependency, so only Continue's JSON forms are discovered; the YAML file is
+  ignored rather than reported as broken.
 * Manifest capture requires a working stdio handshake. Servers that require
   authentication before `tools/list` will report `unknown`.
 * `watch` polls. A host hook that checks immediately before each tool call is stronger

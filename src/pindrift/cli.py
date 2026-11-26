@@ -53,6 +53,7 @@ def _load_specs(args: argparse.Namespace) -> list[ServerSpec]:
     specs, errors, _ = collect(
         include_project=not getattr(args, "no_project", False),
         root=Path(getattr(args, "root", None) or Path.cwd()),
+        dedupe=getattr(args, "dedupe", False),
     )
     for error in errors:
         print(f"warning: {error.client} {error.path}: {error.message}", file=sys.stderr)
@@ -309,7 +310,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"pindrift {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    def add_common(sub: argparse.ArgumentParser, *, probe_flag: bool = True) -> None:
+    def add_common(
+        sub: argparse.ArgumentParser, *, probe_flag: bool = True, dedupe_flag: bool = True
+    ) -> None:
         sub.add_argument("--root", help="project root for project-scoped configs")
         sub.add_argument("--no-project", action="store_true", help="ignore project-scoped configs")
         sub.add_argument(
@@ -317,6 +320,12 @@ def build_parser() -> argparse.ArgumentParser:
         )
         if probe_flag:
             sub.add_argument("--no-probe", action="store_true", help="skip manifest probing")
+        if dedupe_flag:
+            sub.add_argument(
+                "--dedupe",
+                action="store_true",
+                help="fingerprint one server once when several clients configure it identically",
+            )
 
     scan = subparsers.add_parser("scan", help="inventory MCP servers without comparing")
     add_common(scan)
@@ -374,7 +383,7 @@ def build_parser() -> argparse.ArgumentParser:
         aliases=["agent-hook"],
         help="check one pending tool call before an agent host runs it",
     )
-    add_common(hook, probe_flag=False)
+    add_common(hook, probe_flag=False, dedupe_flag=False)
     hook.add_argument(
         "--host",
         required=True,
