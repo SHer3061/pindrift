@@ -11,6 +11,7 @@ Claim one task per worktree, and respect its file list.
 | T1 hook | `cli.py`, `tests/test_hook.py` | `src/pindrift/hook.py` |
 | T2 trust | `store.py`, `tests/test_trust.py` | `src/pindrift/trust.py` |
 | T3 discovery | `discover.py`, `tests/test_discover.py` | — |
+| T3b pin identity | `models.py`, `store.py`, `discover.py`, `cli.py`, `tests/test_pin_identity.py` | `tests/test_pin_identity.py` |
 | T4 capability | `capability.py`, `tests/test_capability.py` | `tests/fixtures/facet_corpus.jsonl` |
 | T5 output | `report.py`, `tests/test_report.py` | `.github/actions/pindrift/action.yml` |
 | T6 research | — | `docs/RESEARCH-content-provenance.md` |
@@ -20,7 +21,8 @@ task genuinely needs a shared file, do it as its own small commit first so the o
 rebase onto a stable base.
 
 **Merge order:** T3 and T4 first (leaf behaviour, no cross-dependency), then T5, then
-T1, then T2. T6 is independent and can land any time.
+T1, then T2, then T3b. T3b changes the pin key that T2 and T5 build on, so it lands
+after both. T6 is independent and can land any time.
 
 ---
 
@@ -83,6 +85,50 @@ clients is fingerprinted and reported once, while the report still names all cli
 
 **Acceptance.** A test with the same server in two client configs collapses to one
 result and lists both clients.
+
+---
+
+## T3b — stable pin identity under dedupe
+
+**Why.** `--dedupe` gives the merged server the alphabetically first client's id. Add a
+client that sorts earlier and `cursor:foo` becomes `claude-code:foo`: the old pin is
+reported `missing`, the merged server is `new`, and any fingerprint keyed on the id
+(notably T5's SARIF `partialFingerprints`) changes, reopening a CI alert for untouched
+code. Until this is fixed, `--dedupe` is only safe when the set of clients is stable,
+so it cannot become the default in CI.
+
+**Scope.** Give a deduped server an identity that survives both client-set changes and
+legitimate launch changes. Pick one deliberately:
+
+1. **Persisted canonical id plus aliases.** Assign a canonical id the first time a group
+   is pinned and record every `client:name` alias. On later runs, a matching alias
+   reuses the canonical id and extends the alias set. Additions are free; removing every
+   aliased client needs an explicit rule (match by name, or report `missing`).
+2. **Persisted opaque id.** Generate a UUID at first pin and store a map from every
+   `client:name` to it. Same alias-expansion problem, but no id ever leaks client order.
+
+Do **not** derive the id by hashing the launch definition. `command`, `args` and `url`
+are exactly what drift detection must observe: if they are part of the identity, a
+legitimate `launch_changed` becomes `missing` + `new` under a different key, which is
+worse than the current behaviour.
+
+**Migration.** Pins written as `client:name` must keep resolving. Either read the old
+key as an alias of the new canonical id, or ship a one-time rewrite during `load()`.
+A pin file that silently loses entries is a security regression.
+
+**Files.** `models.py`, `store.py`, `discover.py`, `cli.py`,
+`tests/test_pin_identity.py` (new). Coordinate with T2 (pin-file schema and signing) and
+T5 (SARIF `partialFingerprints`); both key on this identity.
+
+**Acceptance.**
+
+- Pin `cursor:foo`; add `claude-code:foo` with the same launch; `check --dedupe` stays
+  `ok`, with no `missing`/`new` and the same canonical id.
+- Change that server's command; `check --dedupe` reports `launch_changed` under the
+  same canonical id, not `missing` plus `new`.
+- Two servers with the same name but different launches remain distinct.
+- A pin file written before this change still matches the same server.
+- SARIF `partialFingerprints` do not change when a client is added or removed.
 
 ---
 

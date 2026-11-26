@@ -391,6 +391,11 @@ def dedupe_specs(specs: list[ServerSpec]) -> list[ServerSpec]:
 
     Entries with the same name and a *different* launch definition are kept apart on
     purpose: that difference is real drift, not duplication.
+
+    The id is therefore client-dependent: adding a client that sorts earlier renames
+    the merged server, which makes an existing pin look missing and the server look
+    new. Stable pin identity is tracked as T3b in docs/TASKS.md; until it lands, keep
+    the same client set between ``pin`` and ``check``.
     """
     groups: dict[tuple[Any, ...], list[ServerSpec]] = {}
     for spec in specs:
