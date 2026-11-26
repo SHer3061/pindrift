@@ -10,6 +10,10 @@ what the constraints are.
 check a server once before install; `pindrift` pins the state a human approved and
 compares against that pin on every run.
 
+MCP client discovery, pinning and drift reports are implemented. Agent-skill
+fingerprinting (including DSH's `SKILL.md` trees) is planned but not implemented; do not
+describe it as covered.
+
 The single case that justifies the whole project: a server whose config file and code
 are byte-identical but whose runtime tool manifest has changed. Everything is built
 around being able to see that.
@@ -48,6 +52,10 @@ src/pindrift/
                   ServerResult, State, Severity. Serialisation is explicit, not asdict().
   discover.py     find + parse client configs into ServerSpec. Tolerant: an unreadable
                   file is reported, never fatal. Reads with utf-8-sig (BOM tolerance).
+  jsoncfg.py      strip JSONC comments and trailing commas without a dependency.
+  sources.py      ~/.pindrift/sources.json registry for manual client configs.
+                  Additive only: it can never hide or override a built-in source.
+  service.py      shared collect -> build/probe -> compare pipeline for CLI, hook, UI.
   fingerprint.py  three hashes: hash_config, artifact sha256, hash_tools.
   probe.py        stdio JSON-RPC handshake, paged tools/list, bounded by timeout.
   capability.py   Facet table + weighted phrase scoring -> capability facets.
@@ -58,6 +66,7 @@ src/pindrift/
   trust.py        HMAC-SHA256 signing for shared baselines; key from env or trust.key.
   report.py       text / JSON / SARIF renderers.
   cli.py          argparse subcommands, exit codes.
+  ui/             optional Tkinter desktop UI; imported lazily by `pindrift gui`.
 tests/            full suite; fixtures/fake_mcp_server.py is a stdio MCP server.
 docs/             DESIGN.md (internals), THREAT-MODEL.md (coverage and gaps).
 examples/         demo.py reproduces the rug-pull narrative end to end.
@@ -67,13 +76,17 @@ examples/         demo.py reproduces the rug-pull narrative end to end.
 
 ```
 config files -> ServerSpec -> ServerFingerprint -> compare() -> Findings -> report
-                                   ^                  ^
-                              probe.py           store.py (pin)
+                     ^              ^                  ^
+                discover.py    probe.py           store.py (pin)
+                     \_____________ service.py ____________/
+                                     |
+                          cli.py / hook.py / ui
 ```
 
 `discover` produces specs. `fingerprint.build()` turns a spec into a fingerprint,
 optionally with a manifest from `probe`. `differ.compare()` takes the pin and the
-current fingerprint and returns a `ServerResult`. `report` renders it.
+current fingerprint and returns a `ServerResult`. `service` owns the composition so
+the CLI, host hook and UI cannot drift from each other; `report` renders the result.
 
 ## Design rules worth preserving
 
@@ -135,6 +148,20 @@ mapping are generic. Add a positive and a negative test in `tests/test_capabilit
 **Add a client config location** — add a `ConfigSource` in
 `discover.user_config_sources()` for the platform, or in `project_config_sources()`
 for project scope. Nothing else changes. Add a parse test in `tests/test_discover.py`.
+Never add a marketplace/cache/template tree; WorkBuddy's `connectors/` is the cautionary
+example.
+
+**Support a one-off client** — `pindrift sources add --client ... --path ...` writes
+`~/.pindrift/sources.json`. The registry is additive: do not give it a way to hide or
+override built-in sources. Keep env/header values out of that file.
+
+**Touch scan/check/pin logic** — do it in `service.py`, not separately in the CLI, hook
+and UI. The three callers must agree on which servers are probed. `service` returns
+dataclasses; only the caller renders or exits.
+
+**Add a UI action** — put backend work in `ui/controller.py`, then call it from
+`ui/views.py` through the existing worker queue. Never touch Tk widgets from a worker
+thread, and never import tkinter at module import time outside `ui/`.
 
 **Add a content heuristic** — extend `HIDDEN_PATTERNS`, `INSTRUCTION_PHRASES` or
 `SENSITIVE_PATH_PATTERNS` in `detect.py`, then map it to a severity inside

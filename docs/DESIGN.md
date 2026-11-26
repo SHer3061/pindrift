@@ -26,24 +26,52 @@ Modules map one-to-one onto that flow:
 | Module | Responsibility |
 |---|---|
 | `discover` | find and parse config files into `ServerSpec` |
+| `jsoncfg` | strip JSONC comments and trailing commas |
+| `sources` | additive registry of custom config files |
 | `fingerprint` | hash config, identify and hash the artifact |
 | `probe` | handshake with a stdio server, capture the manifest |
 | `capability` | infer facets from a tool definition |
 | `detect` | content heuristics and redaction |
 | `differ` | compare a fingerprint against a pin, produce findings |
+| `service` | one scan/pin pipeline shared by CLI, hook and UI |
 | `store` | read and write the pin file |
 | `report` | text, JSON, SARIF |
+| `ui` | optional Tkinter desktop interface |
 
 ## Discovery and dedupe
 
 Discovery is a list of known config paths plus a few directory scans: VS Code
-`globalStorage` for Cline, each installed JetBrains product directory, and
-`.continue/mcpServers/*.json` for Continue. Product and version directory names are
-discovered, not guessed, so an IDE upgrade does not silently drop coverage.
+`globalStorage` for Cline/Roo/Kilo, each installed JetBrains product directory,
+`.continue/mcpServers/*.json`, WorkBuddy `project-resources/*/mcp.json`, and the
+per-platform userData directories of Electron clients. Product and version directory
+names are discovered, not guessed, so an IDE upgrade does not silently drop coverage.
 
 Client formats differ in more than the path. Zed puts servers under `context_servers`
-and has historically nested `command` as `{"path", "args", "env"}`; `_command_parts()`
-normalises that to the same `ServerSpec` every other client produces.
+and has historically nested `command` as `{"path", "args", "env"}`. Kilo and OpenCode
+write `command` as an array and env under `environment`. `_command_parts()` normalises
+all of them to the same `ServerSpec`. `.jsonc` files go through `jsoncfg.strip_jsonc`,
+which removes comments and trailing commas without a JSON5/YAML dependency.
+`disabled: true` entries are skipped and counted as info, not treated as active
+servers.
+
+WorkBuddy's `connectors/` tree is a connector template library (hundreds of entries
+with `disabled: true`), not an active configuration. Only `~/.workbuddy/mcp.json`,
+its project-resources files, and project `.workbuddy/mcp.json` are registered.
+Marketplace caches, credentials and session data are never scanned.
+
+YAML-only clients (Goose, DSH/Cordis) cannot be parsed without a dependency. They are
+listed by `sources list` and the UI as `unsupported`, never silently omitted. DSH has
+no MCP server config on a stock install; skill fingerprinting is a separate planned
+feature.
+
+### Custom sources
+
+`~/.pindrift/sources.json` is an additive registry for clients that are not built in.
+`discover()` always loads built-ins first; a custom path that resolves to a built-in
+file is ignored, and the registry has no way to hide or disable a built-in source.
+A missing custom file is a warning, and a corrupt registry is an error that is
+surfaced instead of degrading to an empty scan. Only absolute paths and JSON, JSONC or
+TOML files are accepted.
 
 `collect(dedupe=True)` groups specs by a launch key — name, transport, command, args,
 env keys, url and header keys. The group's id is the id it was first pinned under;
@@ -177,10 +205,28 @@ every existing user.
 The limit is authorship: a shared secret proves the file was written by someone holding
 the key, not *which* teammate. See [THREAT-MODEL.md](THREAT-MODEL.md#threat-model-of-pindrift-itself).
 
+### Desktop UI
+
+`pindrift gui` is a Tkinter process, not a local web server. Opening a socket (even on
+loopback) would add an attack surface and conflict with the no-network rule. Tkinter is
+part of the Python standard library but is an optional OS package on some Linux
+distributions; `ui.app.main()` imports it lazily, so no other command depends on it.
+
+The UI calls `service` for every scan, check, pin and approve; it does not call CLI
+handlers, which write to stdout and return exit codes. Probes run in one daemon worker
+thread and post results back through a queue to `root.after()`. A generation counter is
+not needed because only one task runs at a time.
+
+The UI never probes on load. `Check` uses probe mode `auto`, which executes only
+servers that already have a pin. `Pin` and `Approve` probe the selected servers but
+require a confirmation dialog first.
+
 ## Extension points
 
 * **New client**: add a `ConfigSource` to `discover.user_config_sources()`; nothing
-  else changes.
+  else changes. Add a parse test in `tests/test_discover.py`.
+* **One-off client**: `pindrift sources add` writes to `~/.pindrift/sources.json`;
+  no code change.
 * **New capability facet**: append a `Facet` to `capability.FACETS`. The scoring,
   aggregation, reporting and severity mapping are all generic.
 * **New detection heuristic**: add to `detect.HIDDEN_PATTERNS`,
@@ -194,13 +240,17 @@ the key, not *which* teammate. See [THREAT-MODEL.md](THREAT-MODEL.md#threat-mode
   local one and says so in its artifact note.
 * Capability inference has both false positives and false negatives; see
   [THREAT-MODEL.md](THREAT-MODEL.md#limits-of-capability-inference).
-* Continue's primary config is `~/.continue/config.yaml`. A YAML parser is not worth
-  a runtime dependency, so only Continue's JSON forms are discovered; the YAML file is
-  ignored rather than reported as broken.
+* YAML-only clients (Goose, DSH/Cordis, Continue's YAML config) are listed as
+  `unsupported` rather than parsed. A YAML parser is not worth a runtime dependency;
+  they are not silently treated as absent.
+* DSH has no MCP server config. Its tools are Cordis plugins and its agent skills are
+  not fingerprinted yet; see the planned skill model.
 * Two pinned servers that share a name cannot be told apart by the name fallback.
   Remove the last recorded alias of one and its pin can still be orphaned; re-pin
   after that change, or give distinct servers distinct names.
 * Manifest capture requires a working stdio handshake. Servers that require
   authentication before `tools/list` will report `unknown`.
-* `watch` polls. A host hook that checks immediately before each tool call is stronger
-  and is on the roadmap.
+* `watch` polls. The `hook` command is stronger for Claude Code, but a host that has no
+  hook API still depends on polling.
+* The desktop UI depends on the platform's Tk package. Without it the `gui` command
+  fails cleanly; there is no fallback web UI by design.

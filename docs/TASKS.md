@@ -14,6 +14,7 @@ Claim one task per worktree, and respect its file list.
 | T3b pin identity | `models.py`, `store.py`, `discover.py`, `cli.py`, `tests/test_pin_identity.py` | `tests/test_pin_identity.py` |
 | T4 capability | `capability.py`, `tests/test_capability.py` | `tests/fixtures/facet_corpus.jsonl` |
 | T5 output | `report.py`, `tests/test_report.py` | `.github/actions/pindrift/action.yml` |
+| T7 skills | `models.py`, `store.py`, `report.py`, `ui/`, `tests/test_skills.py` | `src/pindrift/skills.py` |
 
 Anything not listed (models, fingerprint, probe, detect, differ, docs) is shared. If a
 task genuinely needs a shared file, do it as its own small commit first so the others
@@ -169,6 +170,29 @@ tool, runs `check --format sarif`, uploads the file, and fails on threshold.
 
 **Acceptance.** `tests/test_report.py` validates the document against the SARIF 2.1.0
 required fields (no network, no schema download — assert the shape directly).
+
+---
+
+## T7 — agent-skill fingerprinting (DSH included)
+
+**Why.** MCP discovery now covers the client configs listed in `README.md`, including
+WorkBuddy and CodeBuddy. DSH has no MCP config: its tools are Cordis plugins and its
+skills live under `~/.dsh/skills/*/SKILL.md`. Treating a skill as an MCP server would
+misuse `transport`, `tools_hash` and the SARIF `server` field.
+
+**Scope.** A separate `SkillFingerprint` model and store: parse SKILL.md frontmatter,
+hash the whole skill directory (`SKILL.md`, `scripts/`, `references/`), expose a
+`skills` view in the UI, and add SARIF rules. Cover DSH first, then WorkBuddy,
+CodeBuddy and Claude skill directories.
+
+**Non-goal.** Do not add a YAML parser for Cordis; report YAML plugin configs as
+`unsupported` until there is a separate decision.
+
+**Files.** `src/pindrift/skills.py`, `models.py`, `store.py`, `report.py`, `ui/`,
+`docs/THREAT-MODEL.md`, `tests/test_skills.py`.
+
+**Acceptance.** A changed `SKILL.md` or a changed script produces drift under the same
+skill id; a removed skill is `missing`; an unreadable skill is `unknown`, never `ok`.
 
 ---
 

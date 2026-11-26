@@ -84,6 +84,14 @@ Severity: **high**.
 
 ## Not detected — read this section
 
+### Agent skills, including DSH, are not monitored yet
+
+The positioning mentions agent skills, but current discovery only covers MCP server
+configs. DSH has no MCP config on a stock install; its tools are Cordis plugins and its
+skills live under `~/.dsh/skills/*/SKILL.md`. A separate skill fingerprint model is
+planned. YAML-only configs (Goose, DSH/Cordis, Continue's YAML form) are listed as
+`unsupported` rather than parsed. None of these are reported as clean.
+
 ### A server that lies about its own manifest
 
 `pindrift` asks the server what tools it has. A server that advertises two tools to
@@ -153,6 +161,26 @@ terminated. This is not a sandbox. If a server is untrusted, do not pin it.
 
 **The pin file is a trust anchor.** If an attacker can rewrite `~/.pindrift/pins.json`,
 they can approve their own drift. Protect it like any other credential-adjacent file.
+
+**Custom sources are additive, not authoritative.** `~/.pindrift/sources.json` can add a
+config path, but it cannot remove, hide or override a built-in source. It stores only
+paths and parse metadata, never env or header values. A missing custom file is a
+warning and a corrupt registry is an error; neither silently shrinks the scan. A
+custom path can still point at a file the attacker controls, but that file is then
+parsed exactly like any other untrusted config and is pinned and reviewed on its own
+terms.
+
+**Coverage gaps are stated, not implied.** YAML-only configs (Goose, DSH/Cordis,
+Continue's YAML form) are listed as `unsupported`; DSH has no MCP server config on a
+stock install and its agent skills are not fingerprinted yet. None of those are
+treated as "no servers found" or as a clean result. WorkBuddy's `connectors/` template
+library is excluded on purpose because it is a catalog of disabled entries, not the
+active configuration.
+
+**The desktop UI adds no server.** `pindrift gui` is a local Tkinter process. It does
+not open a socket, start a browser, or call the network. It uses the same `service`
+pipeline as the CLI, so `Check` still probes only already-pinned servers, and
+`Pin`/`Approve` require explicit confirmation before executing or writing.
 
 A baseline can carry an HMAC-SHA256 signature (`pindrift trust init`). This protects a
 copy that leaves the machine — one committed to a repository — from edits by anyone

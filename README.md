@@ -53,6 +53,7 @@ pindrift scan --dedupe     # one row per server, naming every client that config
 pindrift pin --all         # record the reviewed state as the trust baseline
 pindrift check             # compare current state against the baseline
 pindrift approve cursor:jira-bridge   # accept the new state, after reviewing the diff
+pindrift gui               # open the desktop monitor
 ```
 
 Run it in a loop, or wire it into CI:
@@ -62,6 +63,25 @@ pindrift check --format sarif --fail-on high > pindrift.sarif
 ```
 
 Exit codes: `0` clean or below threshold, `2` findings at or above `--fail-on` (default `high`), `3` a `--baseline` file could not be verified (or `trust verify` failed), `64` usage error.
+
+### Desktop UI
+
+`pindrift gui` opens a native Tkinter window: Overview, Servers, Sources and
+Settings. It is optional; every CLI command works without Tk. The package also
+installs `pindrift-gui` for launching from a desktop shortcut.
+
+- **Scan** loads the current inventory without executing a server.
+- **Check** compares against the baseline and probes only servers that already have a pin.
+- **Pin** and **Approve** ask for confirmation before writing anything and before
+  executing a server.
+- **Sources** shows built-in and manually registered config files and lets you add,
+  remove or test a custom path.
+- Nothing is served over a socket: the UI is a local Tk process, with no browser,
+  telemetry or update check.
+
+Linux distributions sometimes package Tk separately (`python3-tk`). Without it, the
+`gui` command explains what is missing and exits with `64`; the rest of the CLI is
+unaffected.
 
 ### Shared signed baseline
 
@@ -116,7 +136,7 @@ Pinned and unchanged:
 
 ```
 $ pindrift check
-pindrift 0.1.0  |  baseline 2026-11-25T09:55:37+00:00  |  2026-11-25 17:55:38 +0800
+pindrift 0.2.0  |  baseline 2026-11-25T09:55:37+00:00  |  2026-11-25 17:55:38 +0800
 1 server(s): 1 ok, 0 drift, 0 new, 0 unverified
 
 No drift detected. All pinned servers match.
@@ -192,6 +212,7 @@ Probing a stdio server means **executing third-party code**. `pindrift` is conse
 - `scan` does not probe unless you pass `--probe`
 - `pin` probes, because pinning is an explicit act of trust
 - `check` probes only servers that already have a pin — an untrusted server is never executed just because you ran a check
+- `pindrift gui` follows the same rule: Scan does not probe, Check probes only pinned servers, and Pin/Approve ask first
 - `--no-probe` degrades to `unknown`, never to `ok`
 - every probe is timeout-bounded and the child process is always terminated
 
@@ -199,7 +220,62 @@ What `pindrift` does **not** do: sandbox the server, inspect network traffic, de
 
 ## Supported config locations
 
-Claude Desktop, Claude Code (`.claude.json`, `.mcp.json`), Cursor, VS Code and Insiders (`mcp.json`), Windsurf, Gemini CLI, Codex (`config.toml`), Cline (VS Code extension `cline_mcp_settings.json` and `~/.cline/mcp.json`), Zed (`context_servers` in user or project settings), JetBrains AI Assistant (`ai/mcp.json` for each installed product, `.idea/mcp.json`) and Continue (JSON blocks under `.continue/mcpServers/` and `~/.continue/config.json`). Both `mcpServers` and `servers` container shapes, plus project-scoped configs found by walking up to the git root.
+Built-in discovery covers the clients below. Paths are per-user unless marked
+project-scoped; Windows, macOS and Linux locations are included where they differ.
+
+| Client | User config | Project config |
+|---|---|---|
+| Claude Code | `~/.claude.json` | `.mcp.json` |
+| Claude Desktop | `claude_desktop_config.json` | — |
+| Cursor | `~/.cursor/mcp.json` | `.cursor/mcp.json` |
+| VS Code / Insiders | `Code/User/mcp.json` | `.vscode/mcp.json` |
+| Windsurf / Devin | `~/.codeium/windsurf/mcp_config.json`, `~/.config/devin/mcp_config.json` | `.devin/mcp_config.json` |
+| Gemini CLI | `~/.gemini/settings.json` | — |
+| Codex CLI | `~/.codex/config.toml` | — |
+| Cline | `~/.cline/mcp.json`, VS Code globalStorage | — |
+| Roo Code | VS Code globalStorage | `.roo/mcp.json` |
+| Kilo Code | `~/.config/kilo/kilo.jsonc`, VS Code globalStorage | `kilo.jsonc`, `.kilo/kilo.jsonc` |
+| OpenCode | `~/.config/opencode/opencode.json(c)` | `opencode.json(c)`, `.opencode/opencode.json(c)` |
+| Zed | `settings.json` | `.zed/settings.json` |
+| JetBrains AI | each product's `ai/mcp.json` | `.idea/mcp.json` |
+| Continue | `~/.continue/config.json` | `.continue/mcpServers/*.json` |
+| GitHub Copilot CLI | `~/.copilot/mcp-config.json` | `.github/mcp.json` |
+| WorkBuddy | `~/.workbuddy/mcp.json`, `~/.workbuddy/project-resources/*/mcp.json` | `.workbuddy/mcp.json` |
+| CodeBuddy | `~/.codebuddy/mcp.json` | `.codebuddy/mcp.json` |
+| LM Studio | `~/.lmstudio/mcp.json` | — |
+| Amazon Q Developer | `~/.aws/amazonq/mcp.json`, `default.json` | `.amazonq/mcp.json` |
+| Warp | `~/.warp/.mcp.json` | `.warp/.mcp.json` |
+| Augment | `~/.augment/settings.json` | — |
+| Trae | `Trae/User/mcp.json`, `~/.trae/mcp.json` | `.trae/mcp.json` |
+| 5ire / Witsy / Jan | platform userData directories | — |
+
+`mcpServers`, `servers`, `mcp` and `context_servers` container shapes are recognised,
+along with JSONC comments and array-style commands. `disabled: true` entries are
+skipped. `connectors/` and marketplace caches are never treated as active servers.
+
+Trae, 5ire, Witsy and Jan paths are best-effort from vendor/community documentation.
+Run `pindrift sources list` to see what was actually found, and use `pindrift sources
+add` if your installation uses a different path.
+
+Some clients keep YAML configs (Goose, DSH/Cordis). Adding a YAML parser would break
+the zero-dependency rule, so `pindrift sources list` shows those files as
+`unsupported` instead of silently ignoring them. DSH has no MCP config on a stock
+install; its tools are plugins and its skills are not scanned yet.
+
+### Manual sources
+
+For a client that is not in the table, register its JSON/JSONC/TOML config once:
+
+```bash
+pindrift sources list
+pindrift sources add --client my-agent --path ~/.my-agent/mcp.json --container mcpServers
+pindrift sources test <id>
+pindrift sources remove <id>
+```
+
+The registry lives at `~/.pindrift/sources.json`. It is additive: a custom source
+cannot hide or override a built-in one. A missing custom file is reported rather than
+ignored, and a corrupt registry is an error, not an empty scan.
 
 The same server is often configured in several clients. `--dedupe` fingerprints it once, and the report still names every client:
 
@@ -214,9 +290,13 @@ Pass `--dedupe` consistently to `pin`, `check`, `approve` and `watch`, and choos
 
 ## Status
 
-`0.1.0` — early, deliberately narrow. Working: discovery, fingerprinting, stdio manifest probing, capability inference, drift comparison against a local pin store, text/JSON/SARIF output, watch mode, a pre-call host hook, and signed shared baselines.
+`0.2.0` — early, deliberately narrow. Working: discovery for the clients above,
+manual source registration, fingerprinting, stdio manifest probing, capability
+inference, drift comparison against a local pin store, text/JSON/SARIF output, watch
+mode, a pre-call host hook, signed shared baselines, and a native desktop UI.
 
-Planned: config write-back for Streamable HTTP servers.
+Planned: DSH/agent-skill fingerprinting (DSH has no MCP config; skills are not scanned
+yet), YAML-backed clients, and config write-back for Streamable HTTP servers.
 
 Contributions and false-positive reports are both welcome — the second kind especially, since every heuristic here is a guess that needs sharpening.
 
