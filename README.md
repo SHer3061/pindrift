@@ -61,7 +61,26 @@ Run it in a loop, or wire it into CI:
 pindrift check --format sarif --fail-on high > pindrift.sarif
 ```
 
-Exit codes: `0` clean or below threshold, `2` findings at or above `--fail-on` (default `high`), `64` usage error.
+Exit codes: `0` clean or below threshold, `2` findings at or above `--fail-on` (default `high`), `3` a `--baseline` file could not be verified (or `trust verify` failed), `64` usage error.
+
+### Shared signed baseline
+
+A local pin file is only as trustworthy as the machine. Teams can commit a signed
+baseline and have everyone compare against it:
+
+```bash
+pindrift pin --all                                     # review and pin locally first
+pindrift trust init --baseline pindrift-baseline.json  # create a key and sign the baseline
+pindrift trust verify --baseline pindrift-baseline.json
+PINDRIFT_TRUST_KEY=... pindrift check --baseline pindrift-baseline.json
+pindrift pin --all --baseline pindrift-baseline.json   # later updates re-sign it
+```
+
+The signature is HMAC-SHA256 over the canonical pin JSON, so whitespace changes are
+harmless and a one-byte change to a fingerprint fails verification. The key comes from
+`PINDRIFT_TRUST_KEY` or `~/.pindrift/trust.key`; the environment variable is what CI
+should use. A baseline that is unsigned, tampered with, or unverifiable is refused with
+exit `3` rather than compared against.
 
 ### GitHub Actions
 
@@ -194,9 +213,9 @@ Pass `--dedupe` consistently to `pin`, `check`, `approve` and `watch`: the merge
 
 ## Status
 
-`0.1.0` — early, deliberately narrow. Working: discovery, fingerprinting, stdio manifest probing, capability inference, drift comparison against a local pin store, text/JSON/SARIF output, watch mode.
+`0.1.0` — early, deliberately narrow. Working: discovery, fingerprinting, stdio manifest probing, capability inference, drift comparison against a local pin store, text/JSON/SARIF output, watch mode, a pre-call host hook, and signed shared baselines.
 
-Planned: config write-back for Streamable HTTP servers, manifest signing so a pin can be verified on another machine, a shared baseline file for teams, and an `agent-hook` subcommand so a host can check the manifest before every tool call rather than on a timer.
+Planned: config write-back for Streamable HTTP servers.
 
 Contributions and false-positive reports are both welcome — the second kind especially, since every heuristic here is a guess that needs sharpening.
 

@@ -8,7 +8,7 @@ Only Claude-specific working notes belong here.
 ## Verify before claiming done
 
 ```bash
-python -m pytest -q          # 71 tests, all must pass
+python -m pytest -q          # full suite, all must pass
 python examples/demo.py      # must still print critical drift in step 4
 ```
 

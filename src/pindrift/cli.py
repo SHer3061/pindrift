@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import __version__, store
+from . import __version__, store, trust
 from .capability import FACET_BY_NAME, infer_capabilities, server_capabilities
 from .detect import analyse_text
 from .differ import compare, summarise
@@ -42,6 +42,7 @@ from .report import (
 
 EXIT_OK = 0
 EXIT_FINDINGS = 2
+EXIT_UNTRUSTED = 3
 EXIT_USAGE = 64
 
 
@@ -108,6 +109,29 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _verified_baseline(path: Path) -> dict[str, object]:
+    """Load a repo-committed baseline and refuse to use it unverified.
+
+    A baseline that cannot be verified is worse than no baseline: it looks like a
+    statement of approved state while anyone who can edit the file controls the
+    comparison. Exit before comparing anything.
+    """
+    try:
+        payload = store.load_path(path)
+    except FileNotFoundError:
+        print(f"pindrift: baseline not found: {path}", file=sys.stderr)
+        raise SystemExit(EXIT_UNTRUSTED)
+    except (OSError, ValueError) as exc:
+        print(f"pindrift: baseline is not a pin file: {path}: {exc}", file=sys.stderr)
+        raise SystemExit(EXIT_UNTRUSTED)
+
+    verdict = trust.verify(payload)
+    if not verdict.ok:
+        print(f"pindrift: refusing to use baseline {path}: {verdict.detail}", file=sys.stderr)
+        raise SystemExit(EXIT_UNTRUSTED)
+    return payload
+
+
 def cmd_pin(args: argparse.Namespace) -> int:
     specs = _load_specs(args)
     if not args.all:
@@ -116,14 +140,48 @@ def cmd_pin(args: argparse.Namespace) -> int:
         print("no MCP servers found to pin", file=sys.stderr)
         return EXIT_USAGE
 
+    target = Path(args.baseline).expanduser() if args.baseline else None
+    if target is not None:
+        try:
+            if trust.load_key() is None:
+                print(
+                    "a shared baseline must be signed; run `pindrift trust init` "
+                    f"or set {trust.ENV_KEY}",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
+        except trust.TrustError as exc:
+            print(f"cannot sign baseline: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+
+        # Refuse to merge into a baseline we cannot verify: re-signing it with our key
+        # would launder pins someone else inserted after the last review.
+        if target.is_file():
+            try:
+                existing = store.load_path(target)
+            except (OSError, ValueError) as exc:
+                print(f"cannot read existing baseline {target}: {exc}", file=sys.stderr)
+                return EXIT_USAGE
+            verdict = trust.verify(existing)
+            if not verdict.ok:
+                print(
+                    f"refusing to overwrite baseline {target}: {verdict.detail}",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
+
     fingerprints = [
         _fingerprint_spec(spec, do_probe=not args.no_probe, timeout=args.timeout)
         for spec in specs
     ]
-    store.put_many(fingerprints, reason="cli-pin")
+    try:
+        written = store.put_many(fingerprints, reason="cli-pin", path=target)
+    except (OSError, ValueError) as exc:
+        print(f"cannot write baseline {target}: {exc}", file=sys.stderr)
+        return EXIT_USAGE
 
     probed = sum(1 for fp in fingerprints if fp.tools is not None)
-    print(f"pinned {len(fingerprints)} server(s) to {store.pins_path()}")
+    print(f"pinned {len(fingerprints)} server(s) to {written}")
     print(f"manifest captured for {probed} of {len(fingerprints)}")
     for fp in fingerprints:
         if fp.tools is None and fp.probe_error:
@@ -131,15 +189,15 @@ def cmd_pin(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _missing_results(pins_in_use: set[str], seen: set[str]) -> list[ServerResult]:
+def _missing_results(payload: dict[str, object], seen: set[str]) -> list[ServerResult]:
     """Pinned servers that no longer appear in any config.
 
     This is reported rather than ignored: quietly removing a server from the config is
     also how you stop being monitored.
     """
     results: list[ServerResult] = []
-    for server_id in sorted(pins_in_use - seen):
-        pin = store.get(server_id)
+    for server_id in sorted(set(payload.get("pins") or {}) - seen):
+        pin = store.from_payload(payload, server_id)
         if pin is None:
             continue
         results.append(
@@ -165,11 +223,21 @@ def _missing_results(pins_in_use: set[str], seen: set[str]) -> list[ServerResult
 
 
 def _run_check(args: argparse.Namespace) -> tuple[list[ServerResult], int]:
+    baseline_path = getattr(args, "baseline", None)
+    if baseline_path:
+        baseline_payload = _verified_baseline(Path(baseline_path).expanduser())
+        baseline = baseline_payload.get("updated_at") or "no baseline"
+        baseline_label = f"baseline {baseline} ({baseline_path})"
+    else:
+        baseline_payload = store.load()
+        baseline = baseline_payload.get("updated_at") or "no baseline"
+        baseline_label = f"baseline {baseline}"
+
     specs = _load_specs(args)
     if args.servers:
         specs = _select(specs, args.servers)
 
-    pinned = store.pinned_ids()
+    pinned = set(baseline_payload.get("pins") or {})
     if not pinned:
         print(
             "no pins yet. Run `pindrift pin --all` after reviewing what is installed.",
@@ -186,12 +254,13 @@ def _run_check(args: argparse.Namespace) -> tuple[list[ServerResult], int]:
             do_probe = spec.server_id in pinned
         fingerprints.append(_fingerprint_spec(spec, do_probe=do_probe, timeout=args.timeout))
 
-    results = [compare(store.get(fp.server_id), fp) for fp in fingerprints]
-    results.extend(_missing_results(pinned, {fp.server_id for fp in fingerprints}))
+    results = [
+        compare(store.from_payload(baseline_payload, fp.server_id), fp) for fp in fingerprints
+    ]
+    results.extend(_missing_results(baseline_payload, {fp.server_id for fp in fingerprints}))
     results.sort(key=lambda r: (r.state == State.OK, r.fingerprint.server_id))
 
     summary = summarise(results)
-    baseline = store.load().get("updated_at") or "no baseline"
     threshold = Severity(args.fail_on)
 
     if args.format == "json":
@@ -203,7 +272,7 @@ def _run_check(args: argparse.Namespace) -> tuple[list[ServerResult], int]:
             render_text(
                 results,
                 summary,
-                baseline_label=f"baseline {baseline}  |  {_now_label()}",
+                baseline_label=f"{baseline_label}  |  {_now_label()}",
                 verbose=args.verbose,
             )
         )
@@ -302,6 +371,60 @@ def cmd_hook(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_trust_init(args: argparse.Namespace) -> int:
+    try:
+        _, key_file, created = trust.ensure_key(force=args.force)
+    except (OSError, trust.TrustError) as exc:
+        print(f"cannot create trust key: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    payload = store.load()
+    if not payload["pins"]:
+        print(
+            "no pins to sign. Run `pindrift pin --all` after reviewing what is installed.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    target = Path(args.baseline).expanduser() if args.baseline else None
+    try:
+        store.save(payload)
+        if target is not None:
+            store.save(payload, target)
+    except (OSError, ValueError) as exc:
+        print(f"cannot write signed baseline: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    if key_file is None:
+        print(f"trust key: {trust.ENV_KEY} (from the environment)")
+    else:
+        label = "created" if created else "existing"
+        print(f"trust key: {key_file} ({label})")
+    print(f"signed {len(payload['pins'])} server(s) in {store.pins_path()}")
+    if target is not None:
+        print(f"wrote signed baseline to {target}")
+    return EXIT_OK
+
+
+def cmd_trust_verify(args: argparse.Namespace) -> int:
+    path = Path(args.baseline).expanduser() if args.baseline else store.pins_path()
+    try:
+        payload = store.load_path(path)
+    except FileNotFoundError:
+        print(f"baseline not found: {path}", file=sys.stderr)
+        return EXIT_UNTRUSTED
+    except (OSError, ValueError) as exc:
+        print(f"cannot read baseline {path}: {exc}", file=sys.stderr)
+        return EXIT_UNTRUSTED
+
+    verdict = trust.verify(payload)
+    if verdict.ok:
+        print(f"{path}: {verdict.detail}")
+        return EXIT_OK
+    print(f"{path}: {verdict.detail}", file=sys.stderr)
+    return EXIT_UNTRUSTED
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pindrift",
@@ -337,12 +460,22 @@ def build_parser() -> argparse.ArgumentParser:
     add_common(pin)
     pin.add_argument("servers", nargs="*", help="server names or ids; omit with --all")
     pin.add_argument("--all", action="store_true", help="pin every discovered server")
+    pin.add_argument(
+        "--baseline",
+        metavar="PATH",
+        help="write a signed baseline to PATH instead of the home pin store",
+    )
     pin.set_defaults(func=cmd_pin)
 
     check = subparsers.add_parser("check", help="compare current state against the baseline")
     add_common(check)
     check.add_argument("servers", nargs="*", help="limit to specific servers")
     check.add_argument("--format", choices=("text", "json", "sarif"), default="text")
+    check.add_argument(
+        "--baseline",
+        metavar="PATH",
+        help="read and verify this baseline instead of the home pin store",
+    )
     check.add_argument(
         "--fail-on",
         choices=("info", "low", "medium", "high", "critical"),
@@ -376,6 +509,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     watch.add_argument("--probe-all", action="store_true")
     watch.add_argument("--verbose", "-v", action="store_true")
+    watch.add_argument(
+        "--baseline",
+        metavar="PATH",
+        help="read and verify this baseline instead of the home pin store",
+    )
     watch.set_defaults(func=cmd_watch)
 
     hook = subparsers.add_parser(
@@ -398,6 +536,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hook.set_defaults(func=cmd_hook)
 
+    trust_parser = subparsers.add_parser("trust", help="sign and verify shared baselines")
+    trust_sub = trust_parser.add_subparsers(dest="trust_command", required=True)
+
+    trust_init = trust_sub.add_parser(
+        "init", help="create a signing key and sign the current pins"
+    )
+    trust_init.add_argument(
+        "--baseline",
+        metavar="PATH",
+        help="also write a signed copy for committing to a repository",
+    )
+    trust_init.add_argument(
+        "--force", action="store_true", help="replace an existing key file"
+    )
+    trust_init.set_defaults(func=cmd_trust_init)
+
+    trust_verify = trust_sub.add_parser("verify", help="verify a baseline signature")
+    trust_verify.add_argument(
+        "--baseline",
+        metavar="PATH",
+        help="baseline file to verify (default: the home pin store)",
+    )
+    trust_verify.set_defaults(func=cmd_trust_verify)
+
     return parser
 
 
@@ -406,6 +568,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except trust.TrustError as exc:
+        print(f"pindrift: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     except SystemExit as exc:
         code = exc.code
         return int(code) if isinstance(code, int) else EXIT_USAGE

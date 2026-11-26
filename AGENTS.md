@@ -55,9 +55,10 @@ src/pindrift/
                   paths, URLs, encoded blobs), diff_lines(), redact_arg().
   differ.py       compare(pin, current) -> ServerResult with graded Findings.
   store.py        ~/.pindrift/pins.json, atomic write via os.replace.
+  trust.py        HMAC-SHA256 signing for shared baselines; key from env or trust.key.
   report.py       text / JSON / SARIF renderers.
   cli.py          argparse subcommands, exit codes.
-tests/            71 tests; fixtures/fake_mcp_server.py is a stdio MCP server.
+tests/            full suite; fixtures/fake_mcp_server.py is a stdio MCP server.
 docs/             DESIGN.md (internals), THREAT-MODEL.md (coverage and gaps).
 examples/         demo.py reproduces the rug-pull narrative end to end.
 ```
