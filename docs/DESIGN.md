@@ -104,6 +104,27 @@ reviewer needs to see.
 Environment values are never stored — only key names. Command-line arguments pass
 through `redact_arg` first.
 
+### Signing and shared baselines
+
+A pin file can be signed with HMAC-SHA256 over the canonicalised document (sorted keys,
+compact separators, `signature` excluded). The signature covers the *content*, not the
+bytes, so reformatting the JSON does not invalidate it and changing a fingerprint does.
+
+`pindrift trust init` writes a 32-byte key to `$PINDRIFT_HOME/trust.key` (mode 0600) if
+`PINDRIFT_TRUST_KEY` is not set. The environment variable always wins, so CI can hold
+the key in a secret store and never write it next to the baseline. Every `store.save()`
+re-signs the document when a key is available and drops any stale signature otherwise.
+
+`--baseline <path>` on `pin` writes the signed document to a repository file;
+`check --baseline` and `trust verify` read it back. A baseline named on the command
+line is read strictly (a corrupt file is an error, not an empty pin set) and must
+verify before it is used. A failure exits `3`; the home pin store is not signature-
+checked, because it may predate signing and `check` would otherwise stop working for
+every existing user.
+
+The limit is authorship: a shared secret proves the file was written by someone holding
+the key, not *which* teammate. See [THREAT-MODEL.md](THREAT-MODEL.md#threat-model-of-pindrift-itself).
+
 ## Extension points
 
 * **New client**: add a `ConfigSource` to `discover.user_config_sources()`; nothing

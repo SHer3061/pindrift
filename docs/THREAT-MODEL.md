@@ -144,8 +144,17 @@ for servers that are already pinned, is timeout-bounded, and the child is always
 terminated. This is not a sandbox. If a server is untrusted, do not pin it.
 
 **The pin file is a trust anchor.** If an attacker can rewrite `~/.pindrift/pins.json`,
-they can approve their own drift. It is plain JSON with no signing. Protect it like any
-other credential-adjacent file; a shared baseline with signatures is on the roadmap.
+they can approve their own drift. Protect it like any other credential-adjacent file.
+
+A baseline can carry an HMAC-SHA256 signature (`pindrift trust init`). This protects a
+copy that leaves the machine — one committed to a repository — from edits by anyone
+without the key. It does **not** protect the local pin file from an attacker who can
+read `$PINDRIFT_HOME/trust.key` sitting beside it, and it proves possession of a shared
+secret rather than the identity of an author. Put the key in `PINDRIFT_TRUST_KEY` from a
+secret store wherever the stronger property matters. A `--baseline` file is refused
+unless its signature verifies; a missing key is reported as unverifiable, never as
+success. A signature also does not prevent replay of an older baseline that was validly
+signed: use the repository history (or a review of the diff) to rule that out.
 
 **Secrets must not leak into the pin.** Environment values are excluded from
 fingerprints and credential-shaped arguments are redacted before anything is written.
