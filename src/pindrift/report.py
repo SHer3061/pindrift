@@ -98,6 +98,10 @@ def render_text(
             f"{palette.state(result.state)} {palette.paint(fp.server_id, BOLD)}"
             f"  {palette.paint(f'[{fp.transport}] {fp.artifact.kind}', DIM)}"
         )
+        if len(fp.all_clients) > 1:
+            lines.append(
+                f"         {palette.paint('clients   ' + ', '.join(fp.all_clients), DIM)}"
+            )
         if result.state == State.UNKNOWN and fp.probe_error:
             lines.append(f"         {palette.paint(fp.probe_error, DIM)}")
 
@@ -140,6 +144,8 @@ def render_inventory(fingerprints: list[ServerFingerprint], pinned: set[str]) ->
         caps = server_capabilities(fp.tools or [])
         cap_text = ", ".join(caps) if caps else ("unknown" if fp.tools is None else "none")
         lines.append(f"{mark} {palette.paint(fp.server_id, BOLD)}  [{fp.transport}]")
+        if len(fp.all_clients) > 1:
+            lines.append(f"    clients   {', '.join(fp.all_clients)}")
         lines.append(f"    config    {fp.source_config}")
         lines.append(f"    artifact  {fp.artifact.kind} {fp.artifact.target}".rstrip())
         if fp.artifact.sha256:
@@ -167,6 +173,7 @@ def render_json(results: list[ServerResult], summary: Summary) -> str:
             {
                 "server_id": result.fingerprint.server_id,
                 "state": result.state.value,
+                "clients": result.fingerprint.all_clients,
                 "transport": result.fingerprint.transport,
                 "artifact": result.fingerprint.artifact.to_dict(),
                 "tools": result.fingerprint.tool_names,
@@ -213,6 +220,7 @@ def render_sarif(results: list[ServerResult]) -> str:
                     "message": {"text": message},
                     "properties": {
                         "server": result.fingerprint.server_id,
+                        "clients": result.fingerprint.all_clients,
                         "severity": finding.severity.value,
                         "evidence": finding.evidence,
                     },
