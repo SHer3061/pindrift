@@ -168,6 +168,7 @@ class ServerFingerprint:
     server_id: str
     client: str
     name: str
+    clients: list[str] = field(default_factory=list)
     transport: str = "unknown"  # stdio | http | sse | unknown
     command: str | None = None
     args: list[str] = field(default_factory=list)
@@ -179,6 +180,11 @@ class ServerFingerprint:
     probed_at: str | None = None
     probe_error: str | None = None
     source_config: str = ""
+
+    @property
+    def all_clients(self) -> list[str]:
+        """Every client that configures this server, not only the primary one."""
+        return list(self.clients) or [self.client]
 
     @property
     def tool_names(self) -> list[str]:
@@ -201,6 +207,7 @@ class ServerFingerprint:
             "server_id": self.server_id,
             "client": self.client,
             "name": self.name,
+            "clients": list(self.clients),
             "transport": self.transport,
             "command": self.command,
             "args": list(self.args),
@@ -226,6 +233,7 @@ class ServerFingerprint:
             server_id=str(payload.get("server_id") or ""),
             client=str(payload.get("client") or ""),
             name=str(payload.get("name") or ""),
+            clients=[str(c) for c in (payload.get("clients") or [])],
             transport=str(payload.get("transport") or "unknown"),
             command=payload.get("command"),
             args=[str(a) for a in (payload.get("args") or [])],
