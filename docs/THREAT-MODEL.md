@@ -128,9 +128,17 @@ directions are real:
 * **False negative.** A tool that deletes files but describes itself as "clean up a
   workspace" carries no facet. The capability delta is then invisible, and only the
   text diff fires at `low`.
-* **False positive.** A tool described as "read the file and write the result to
-  stdout" triggers `fs.write` because the phrase matches, even though no file write
-  occurs.
+* **False positive.** A tool described as "never write the file" still triggers
+  `fs.write`: the phrase matches and the model does not parse negation. Likewise a
+  tool that merely mentions a provider, such as "look up AWS pricing", is not
+  `cloud.control` — the phrases require a service or control context — but other
+  incidental mentions will get through.
+
+Both rates are measured against a labelled corpus in
+`tests/fixtures/facet_corpus.jsonl`, which covers every facet and includes benign
+tools that must produce no facet at all. The test suite fails if per-facet precision
+drops below 0.85 or recall below 0.80. That is a regression gate on a small,
+hand-written corpus, not a guarantee about servers in the wild.
 
 Every hit carries the phrases that fired so a reviewer can overrule the tool quickly.
 Treat the facet as a prompt for review, not as a verdict. `pindrift caps <server>`
