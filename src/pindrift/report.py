@@ -6,15 +6,17 @@ exists because a security tool that only speaks JSON does not get used.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from . import __version__
 from .capability import FACET_BY_NAME, server_capabilities
-from .differ import Summary
+from .differ import Summary, visible
 from .models import SARIF_LEVEL, SEVERITY_RANK, ServerFingerprint, ServerResult, Severity, State
 
 RESET = "\x1b[0m"
@@ -178,43 +180,316 @@ def render_json(results: list[ServerResult], summary: Summary) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+PROJECT_URI = "https://github.com/SHer/pindrift"
+THREAT_MODEL_URI = f"{PROJECT_URI}/blob/main/docs/THREAT-MODEL.md"
+SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
+RULE_ID_PREFIX = "pindrift"
+
+
+@dataclass(frozen=True)
+class SarifRule:
+    """Static metadata for one finding kind.
+
+    Rules are declared here rather than derived from whatever a run happened to
+    emit, so ``defaultConfiguration`` and ``helpUri`` do not change just because the
+    same drift was graded differently on two machines. ``help_anchor`` must match a
+    heading in docs/THREAT-MODEL.md; tests/test_report.py verifies that.
+    """
+
+    kind: str
+    name: str
+    title: str
+    description: str
+    help_anchor: str
+    severity: Severity
+
+    @property
+    def rule_id(self) -> str:
+        return f"{RULE_ID_PREFIX}/{self.kind}"
+
+    @property
+    def help_uri(self) -> str:
+        base = f"{THREAT_MODEL_URI}#{self.help_anchor}" if self.help_anchor else THREAT_MODEL_URI
+        return base
+
+    def to_sarif(self) -> dict[str, Any]:
+        return {
+            "id": self.rule_id,
+            "name": self.name,
+            "shortDescription": {"text": self.title},
+            "fullDescription": {"text": self.description},
+            "helpUri": self.help_uri,
+            "defaultConfiguration": {"level": SARIF_LEVEL[self.severity]},
+            "properties": {
+                "tags": ["security", "mcp", "supply-chain", self.kind],
+            },
+        }
+
+
+_RULE_SPECS = (
+    SarifRule(
+        kind="description_risk",
+        name="DescriptionRisk",
+        title="Tool description contains risky content",
+        description=(
+            "A tool description contains content a human reviewer and the model "
+            "would perceive differently: hidden characters, instruction-shaped "
+            "phrasing, credential paths, suspicious URLs, or encoded blobs."
+        ),
+        help_anchor="tool-poisoning--hidden-instructions-in-a-description",
+        severity=Severity.CRITICAL,
+    ),
+    SarifRule(
+        kind="capability_added",
+        name="CapabilityAdded",
+        title="Tool gained a capability",
+        description=(
+            "An existing tool gained a capability facet that the approved manifest "
+            "did not have. Severity follows the most dangerous facet gained."
+        ),
+        help_anchor="capability-escalation",
+        severity=Severity.CRITICAL,
+    ),
+    SarifRule(
+        kind="capability_removed",
+        name="CapabilityRemoved",
+        title="Tool lost a capability",
+        description=(
+            "An existing tool lost a capability facet. Usually benign, but it can "
+            "also hide a replacement implementation behind an unchanged name."
+        ),
+        help_anchor="capability-escalation",
+        severity=Severity.INFO,
+    ),
+    SarifRule(
+        kind="tool_added",
+        name="ToolAdded",
+        title="Tool added after approval",
+        description=(
+            "A tool appeared in the manifest after the server was approved. Graded "
+            "by what the new tool can do, not by the size of the diff."
+        ),
+        help_anchor="capability-escalation",
+        severity=Severity.HIGH,
+    ),
+    SarifRule(
+        kind="tool_removed",
+        name="ToolRemoved",
+        title="Tool removed",
+        description="A tool present at approval time is no longer advertised.",
+        help_anchor="rug-pull--silent-redefinition-after-approval",
+        severity=Severity.LOW,
+    ),
+    SarifRule(
+        kind="schema_changed",
+        name="SchemaChanged",
+        title="Tool input schema changed",
+        description=(
+            "A tool's input schema changed, so the server now accepts or requires "
+            "different parameters. Added properties raise the severity."
+        ),
+        help_anchor="rug-pull--silent-redefinition-after-approval",
+        severity=Severity.MEDIUM,
+    ),
+    SarifRule(
+        kind="annotations_changed",
+        name="AnnotationsChanged",
+        title="Tool annotations changed",
+        description=(
+            "MCP annotations changed. They drive host-side permission prompts, so "
+            "weakening them changes what the model is allowed to do without a "
+            "prompt."
+        ),
+        help_anchor="capability-escalation",
+        severity=Severity.MEDIUM,
+    ),
+    SarifRule(
+        kind="launch_changed",
+        name="LaunchChanged",
+        title="Launch definition changed",
+        description=(
+            "The command or its arguments changed, so a different executable or "
+            "code path now runs where the pinned one did."
+        ),
+        help_anchor="launch-definition-change",
+        severity=Severity.HIGH,
+    ),
+    SarifRule(
+        kind="env_changed",
+        name="EnvChanged",
+        title="Environment key set changed",
+        description=(
+            "The set of environment keys the server can read changed. New keys mean "
+            "the server can reach configuration it could not reach before."
+        ),
+        help_anchor="launch-definition-change",
+        severity=Severity.MEDIUM,
+    ),
+    SarifRule(
+        kind="transport_changed",
+        name="TransportChanged",
+        title="Transport changed",
+        description="The same server is now reached over a different transport.",
+        help_anchor="launch-definition-change",
+        severity=Severity.MEDIUM,
+    ),
+    SarifRule(
+        kind="artifact_changed",
+        name="ArtifactChanged",
+        title="Artifact identity or digest changed",
+        description=(
+            "The code behind the server changed while the launch definition did "
+            "not: a different target, or a different sha256 for the same target."
+        ),
+        help_anchor="artifact-swap",
+        severity=Severity.HIGH,
+    ),
+    SarifRule(
+        kind="artifact_unverifiable",
+        name="ArtifactUnverifiable",
+        title="Artifact can no longer be verified",
+        description=(
+            "The pinned artifact can no longer be found or read, so its digest "
+            "cannot be checked. Absence of a mismatch is not a match."
+        ),
+        help_anchor="artifact-swap",
+        severity=Severity.MEDIUM,
+    ),
+    SarifRule(
+        kind="manifest_unverified",
+        name="ManifestUnverified",
+        title="Tool manifest could not be verified",
+        description=(
+            "The server did not return a tool manifest, so drift in tool "
+            "definitions cannot be ruled out. This is not the same as clean."
+        ),
+        help_anchor="a-server-that-lies-about-its-own-manifest",
+        severity=Severity.MEDIUM,
+    ),
+    SarifRule(
+        kind="manifest_established",
+        name="ManifestEstablished",
+        title="Manifest captured for a previously unprobed pin",
+        description=(
+            "A tool manifest was captured for a server that was pinned without "
+            "probing. Future runs can now detect tool-level drift."
+        ),
+        help_anchor="rug-pull--silent-redefinition-after-approval",
+        severity=Severity.INFO,
+    ),
+    SarifRule(
+        kind="server_missing",
+        name="ServerMissing",
+        title="Pinned server is no longer configured",
+        description=(
+            "A pinned server is absent from every discovered client config. "
+            "Removing a config entry is also how monitoring of a server is stopped."
+        ),
+        help_anchor="assumed-attacker-capability",
+        severity=Severity.MEDIUM,
+    ),
+    SarifRule(
+        kind="unpinned",
+        name="Unpinned",
+        title="Server has no pin",
+        description=(
+            "No pin exists for this server, so there is no baseline to compare "
+            "against. A clean check on a fresh machine is accepted risk, not a "
+            "clean bill of health."
+        ),
+        help_anchor="malicious-code-that-behaves-identically",
+        severity=Severity.INFO,
+    ),
+    SarifRule(
+        kind="description_changed",
+        name="DescriptionChanged",
+        title="Tool description changed",
+        description=(
+            "A tool description changed without any content or capability signal. "
+            "Low risk, but this is still text the model reads as instruction."
+        ),
+        help_anchor="limits-of-capability-inference",
+        severity=Severity.LOW,
+    ),
+)
+
+SARIF_RULES: dict[str, SarifRule] = {rule.kind: rule for rule in _RULE_SPECS}
+
+
+def _fallback_rule(kind: str, severity: Severity) -> SarifRule:
+    """Keep an unrecognised finding reportable instead of dropping it.
+
+    A new kind must stay visible even before it gets curated metadata. The
+    synthesised rule is still schema-valid; only its help link is less specific.
+    """
+    identifier = "".join(part.capitalize() for part in kind.replace("-", "_").split("_"))
+    if not identifier or not identifier[0].isalpha():
+        identifier = f"Finding{identifier}"
+    return SarifRule(
+        kind=kind,
+        name=identifier,
+        title=kind.replace("_", " "),
+        description="pindrift reported a finding whose kind has no static rule entry.",
+        help_anchor="",
+        severity=severity,
+    )
+
+
+def _rule_for(kind: str, severity: Severity) -> SarifRule:
+    return SARIF_RULES.get(kind) or _fallback_rule(kind, severity)
+
+
 def _file_uri(path: str) -> str:
     try:
-        return Path(path).resolve().as_uri()
+        return Path(path or ".").resolve().as_uri()
     except (OSError, ValueError):
         return "file:///"
 
 
+def _partial_fingerprint(rule_id: str, server_id: str, title: str, detail: str) -> str:
+    """Stable identity for one finding across runs.
+
+    Evidence is deliberately excluded: it carries concrete values (digests, probe
+    errors) that legitimately change between runs while the finding stays the same.
+    Rule, server, title and detail identify the drift.
+    """
+    identity = "\x00".join((rule_id, server_id, title, detail))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
 def render_sarif(results: list[ServerResult]) -> str:
-    rules: dict[str, dict[str, Any]] = {}
+    rule_indexes: dict[str, int] = {}
+    rules: list[dict[str, Any]] = []
     sarif_results: list[dict[str, Any]] = []
 
     for result in results:
         for finding in result.findings:
             if finding.severity == Severity.INFO and finding.kind == "unpinned":
                 continue
-            rule_id = f"pindrift/{finding.kind}"
-            rules.setdefault(
-                rule_id,
-                {
-                    "id": rule_id,
-                    "name": finding.kind.replace("_", " ").title(),
-                    "shortDescription": {"text": finding.kind.replace("_", " ")},
-                    "defaultConfiguration": {"level": SARIF_LEVEL[finding.severity]},
-                },
-            )
-            message = finding.title
-            if finding.detail:
-                message = f"{message}. {finding.detail}"
+            rule = _rule_for(finding.kind, finding.severity)
+            if rule.rule_id not in rule_indexes:
+                rule_indexes[rule.rule_id] = len(rules)
+                rules.append(rule.to_sarif())
+            index = rule_indexes[rule.rule_id]
+
+            title = visible(finding.title)
+            detail = visible(finding.detail)
+            message = title if not detail else f"{title}. {detail}"
             sarif_results.append(
                 {
-                    "ruleId": rule_id,
+                    "ruleId": rule.rule_id,
+                    "ruleIndex": index,
                     "level": SARIF_LEVEL[finding.severity],
                     "message": {"text": message},
+                    "partialFingerprints": {
+                        f"{RULE_ID_PREFIX}/v1": _partial_fingerprint(
+                            rule.rule_id, result.fingerprint.server_id, title, detail
+                        )
+                    },
                     "properties": {
                         "server": result.fingerprint.server_id,
                         "severity": finding.severity.value,
-                        "evidence": finding.evidence,
+                        "evidence": [visible(item) for item in finding.evidence],
                     },
                     "locations": [
                         {
@@ -230,7 +505,7 @@ def render_sarif(results: list[ServerResult]) -> str:
             )
 
     document = {
-        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "$schema": SARIF_SCHEMA,
         "version": "2.1.0",
         "runs": [
             {
@@ -238,8 +513,8 @@ def render_sarif(results: list[ServerResult]) -> str:
                     "driver": {
                         "name": "pindrift",
                         "version": __version__,
-                        "informationUri": "https://github.com/SHer/pindrift",
-                        "rules": list(rules.values()),
+                        "informationUri": PROJECT_URI,
+                        "rules": rules,
                     }
                 },
                 "results": sarif_results,

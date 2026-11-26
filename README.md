@@ -62,6 +62,31 @@ pindrift check --format sarif --fail-on high > pindrift.sarif
 
 Exit codes: `0` clean or below threshold, `2` findings at or above `--fail-on` (default `high`), `64` usage error.
 
+### GitHub Actions
+
+[`.github/actions/pindrift`](.github/actions/pindrift/action.yml) is a composite action
+that installs the tool, checks against a baseline, writes SARIF, uploads it to code
+scanning, and fails the job when a finding reaches `fail-on`:
+
+```yaml
+permissions:
+  contents: read
+  security-events: write
+
+steps:
+  - uses: actions/checkout@v4
+  - uses: SHer/pindrift/.github/actions/pindrift@main
+    with:
+      fail-on: high
+      pins-file: .github/pindrift/pins.json   # a baseline committed to the repository
+```
+
+A runner with no baseline would verify nothing, so the action refuses to run without
+one rather than reporting a clean result. Each finding kind maps to a stable SARIF
+rule whose `helpUri` points at the matching section of the threat model, and each
+result carries a `partialFingerprints` entry so code scanning dedupes the same drift
+across runs instead of reopening it.
+
 ### Drift in practice
 
 Pinned and unchanged:

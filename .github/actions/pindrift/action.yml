@@ -1,0 +1,163 @@
+name: pindrift check
+description: >-
+  Detect drift in configured MCP servers, upload the SARIF report, and fail the job
+  when a finding is at or above the threshold.
+author: pindrift
+
+# The caller's job needs `permissions: security-events: write` for the upload step.
+# Set `upload: "false"` to use the report without GitHub code scanning.
+
+inputs:
+  fail-on:
+    description: Minimum severity that fails the job (info, low, medium, high, critical).
+    required: false
+    default: high
+  version:
+    description: >-
+      pindrift version to install, without a leading "v" (for example 0.1.0). Leave
+      empty for the latest release; pin it when reproducibility matters.
+    required: false
+    default: ""
+  python-version:
+    description: Python used to run pindrift. Requires 3.10 or newer.
+    required: false
+    default: "3.12"
+  sarif-file:
+    description: Path for the SARIF report, relative to the workspace unless absolute.
+    required: false
+    default: pindrift.sarif
+  upload:
+    description: Upload the report with github/codeql-action/upload-sarif.
+    required: false
+    default: "true"
+  pins-file:
+    description: >-
+      Path to a pins.json baseline to check against, for example one committed to the
+      repository. Empty uses the runner's existing store at $PINDRIFT_HOME.
+    required: false
+    default: ""
+  root:
+    description: Project root for project-scoped configs. Empty uses the workspace.
+    required: false
+    default: ""
+  no-project:
+    description: Ignore project-scoped configs and read only user-level ones.
+    required: false
+    default: "false"
+  timeout:
+    description: Per-server probe timeout in seconds.
+    required: false
+    default: "20"
+
+outputs:
+  exit-code:
+    description: pindrift exit code (0 clean, 2 findings at or above the threshold).
+    value: ${{ steps.check.outputs.exit-code }}
+  sarif-file:
+    description: Path of the generated SARIF report.
+    value: ${{ inputs.sarif-file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install pindrift
+      shell: bash
+      env:
+        PINDRIFT_VERSION: ${{ inputs.version }}
+      run: |
+        if [ -n "$PINDRIFT_VERSION" ]; then
+          python -m pip install --disable-pip-version-check "pindrift==${PINDRIFT_VERSION#v}"
+        else
+          python -m pip install --disable-pip-version-check pindrift
+        fi
+
+    - name: Require a baseline
+      shell: bash
+      env:
+        PINS_FILE: ${{ inputs.pins-file }}
+      run: |
+        if [ -n "$PINS_FILE" ]; then
+          if [ ! -f "$PINS_FILE" ]; then
+            echo "::error title=pindrift::Baseline '$PINS_FILE' does not exist."
+            exit 1
+          fi
+          # Copy instead of using the file in place so the run never mutates the
+          # baseline committed to the repository, and never touches a runner's
+          # real store.
+          home="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/pindrift-home"
+          mkdir -p "$home"
+          cp "$PINS_FILE" "$home/pins.json"
+          echo "PINDRIFT_HOME=$home" >> "$GITHUB_ENV"
+        else
+          home="${PINDRIFT_HOME:-$HOME/.pindrift}"
+        fi
+        if [ ! -f "$home/pins.json" ]; then
+          echo "::error title=pindrift::No baseline found. Pass a committed pins.json as 'pins-file', or pin on this runner first."
+          exit 1
+        fi
+        echo "checking against $home/pins.json"
+
+    - name: Check for drift
+      id: check
+      shell: bash
+      env:
+        FAIL_ON: ${{ inputs.fail-on }}
+        SARIF_FILE: ${{ inputs.sarif-file }}
+        ROOT: ${{ inputs.root }}
+        NO_PROJECT: ${{ inputs.no-project }}
+        TIMEOUT: ${{ inputs.timeout }}
+      run: |
+        set +e
+        args=(check --format sarif --fail-on "$FAIL_ON" --timeout "$TIMEOUT")
+        if [ -n "$ROOT" ]; then
+          args+=(--root "$ROOT")
+        fi
+        if [ "$NO_PROJECT" = "true" ]; then
+          args+=(--no-project)
+        fi
+        python -m pindrift "${args[@]}" > "$SARIF_FILE"
+        code=$?
+        set -e
+
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        if [ -s "$SARIF_FILE" ]; then
+          echo "has-sarif=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has-sarif=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        # Never fail here: an unreadable report is still worth uploading when one
+        # exists, and the final step is the single place that decides the job result.
+        exit 0
+
+    - name: Upload SARIF
+      if: ${{ inputs.upload == 'true' && steps.check.outputs.has-sarif == 'true' }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: pindrift
+
+    - name: Fail on findings
+      if: ${{ steps.check.outcome == 'success' && steps.check.outputs.exit-code != '0' }}
+      shell: bash
+      env:
+        EXIT_CODE: ${{ steps.check.outputs.exit-code }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        case "$EXIT_CODE" in
+          2)
+            echo "::error title=pindrift::Drift at or above '$FAIL_ON'. Review the SARIF report or run 'pindrift check' locally, then re-pin with 'pindrift approve <server>' if the change is intended."
+            ;;
+          64)
+            echo "::error title=pindrift::pindrift rejected the command line; check the action inputs."
+            ;;
+          *)
+            echo "::error title=pindrift::pindrift failed with exit code $EXIT_CODE."
+            ;;
+        esac
+        exit "$EXIT_CODE"

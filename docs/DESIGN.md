@@ -34,6 +34,26 @@ Modules map one-to-one onto that flow:
 | `store` | read and write the pin file |
 | `report` | text, JSON, SARIF |
 
+### SARIF output
+
+SARIF exists so CI can gate on a drift result without a custom parser, which makes
+the document a public interface:
+
+* Every finding kind has static metadata in `report.SARIF_RULES`: a rule id, an
+  identifier-shaped `name`, descriptions, a `defaultConfiguration` and a `helpUri`
+  pointing at a heading in `docs/THREAT-MODEL.md`. Rule metadata is not derived from
+  the current run, so a finding graded differently on another machine does not
+  rewrite the rule. `tests/test_report.py` checks every anchor against the actual
+  headings in the threat model.
+* Results carry `ruleId`, `ruleIndex` and a `partialFingerprints["pindrift/v1"]`
+  hash of rule, server, title and detail. Evidence is excluded because digests and
+  probe errors legitimately change between runs. Code scanning uses the fingerprint
+  to dedupe a finding instead of reopening it on every build.
+* An unrecognised kind gets a synthesised but schema-valid rule rather than being
+  dropped, so a future finding cannot disappear from the report.
+* Titles, details and evidence pass through `differ.visible()` before encoding, so a
+  hidden character cannot travel through SARIF into a viewer unescaped.
+
 ## The three fingerprint layers
 
 They answer different questions and fail independently, which is why all three exist.
