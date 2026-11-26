@@ -177,8 +177,11 @@ treated as "no servers found" or as a clean result. WorkBuddy's `connectors/` te
 library is excluded on purpose because it is a catalog of disabled entries, not the
 active configuration.
 
-**The desktop UI adds no server.** `pindrift gui` is a local Tkinter process. It does
-not open a socket, start a browser, or call the network. It uses the same `service`
+**The desktop UI adds no server.** `pindrift gui` renders one inlined local HTML
+document in the operating system WebView. It does not open a socket, start a browser,
+load a CDN, or call the network. The page has a strict CSP, and all server-controlled
+strings are inserted with `textContent`, not HTML. The bridge exposes only validated
+ids and source paths; it never accepts a command or URL. It uses the same `service`
 pipeline as the CLI, so `Check` still probes only already-pinned servers, and
 `Pin`/`Approve` require explicit confirmation before executing or writing.
 

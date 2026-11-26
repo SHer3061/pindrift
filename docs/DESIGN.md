@@ -36,7 +36,7 @@ Modules map one-to-one onto that flow:
 | `service` | one scan/pin pipeline shared by CLI, hook and UI |
 | `store` | read and write the pin file |
 | `report` | text, JSON, SARIF |
-| `ui` | optional Tkinter desktop interface |
+| `ui` | optional pywebview + HTML/CSS/JS desktop interface |
 
 ## Discovery and dedupe
 
@@ -207,19 +207,27 @@ the key, not *which* teammate. See [THREAT-MODEL.md](THREAT-MODEL.md#threat-mode
 
 ### Desktop UI
 
-`pindrift gui` is a Tkinter process, not a local web server. Opening a socket (even on
-loopback) would add an attack surface and conflict with the no-network rule. Tkinter is
-part of the Python standard library but is an optional OS package on some Linux
-distributions; `ui.app.main()` imports it lazily, so no other command depends on it.
+`pindrift gui` is an optional pywebview desktop app. The base CLI has no dependencies;
+the `desktop` extra adds pywebview and the OS WebView backend. `ui/app.py` imports
+`webview` lazily, reads `index.html`, `app.css` and `app.js` from the package, inlines
+them into one HTML string with a strict CSP, and passes it through `html=` — never a
+URL or relative asset path that would make pywebview start a loopback server.
 
 The UI calls `service` for every scan, check, pin and approve; it does not call CLI
-handlers, which write to stdout and return exit codes. Probes run in one daemon worker
-thread and post results back through a queue to `root.after()`. A generation counter is
-not needed because only one task runs at a time.
+handlers, which write to stdout and return exit codes. `ui/present.py` converts
+dataclasses to JSON-safe rows: only `ServerFingerprint` data is exposed, never
+`ServerSpec.env` or raw headers, and evidence is passed through `differ.visible()` and
+truncated. `ui/bridge.py` is the JS API surface; it validates ids against the current
+inventory and requires `confirm: true` for writes.
 
-The UI never probes on load. `Check` uses probe mode `auto`, which executes only
-servers that already have a pin. `Pin` and `Approve` probe the selected servers but
-require a confirmation dialog first.
+Check and write operations run as jobs in a daemon thread with progress callbacks;
+`job_status` is polled by the page. The UI never probes on load. `Check` uses probe mode
+`auto`, which executes only servers that already have a pin. `Pin` and `Approve` probe
+the selected servers but require a confirmation dialog first.
+
+The page is intentionally framework-free (no Node, React, VS Code or CDN). This keeps
+the package auditable and installable with pip alone. Preferences live in
+`~/.pindrift/ui.json`, not in WebView localStorage.
 
 ## Extension points
 
@@ -252,5 +260,6 @@ require a confirmation dialog first.
   authentication before `tools/list` will report `unknown`.
 * `watch` polls. The `hook` command is stronger for Claude Code, but a host that has no
   hook API still depends on polling.
-* The desktop UI depends on the platform's Tk package. Without it the `gui` command
-  fails cleanly; there is no fallback web UI by design.
+* The desktop UI depends on the optional pywebview extra and the OS WebView runtime
+  (WebView2 on Windows, WebKitGTK/Qt on Linux). Without it the `gui` command fails
+  cleanly; there is no fallback web UI by design.

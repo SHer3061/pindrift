@@ -26,13 +26,13 @@ These are not preferences. Breaking one is a bug, not a style choice.
    3.11+; `discover.py` already guards it). No `typing.Self`, no `except*`, no 3.12+
    syntax. `X | Y` annotations are fine because every module starts with
    `from __future__ import annotations`.
-2. **Zero runtime dependencies.** `dependencies = []` in `pyproject.toml` stays empty.
-   The tool is installed with `pipx` by people auditing it; every dependency is a
-   reason not to trust it.
+2. **Zero base runtime dependencies.** `dependencies = []` in `pyproject.toml` stays
+   empty. The CLI is installed with `pipx` by people auditing it; every base dependency
+   is a reason not to trust it. `pywebview` is allowed only under the optional
+   `desktop` extra and must never be imported outside the `gui` entry path.
 3. **No network access at runtime.** Ever. Not for version resolution, not for
-   telemetry, not for update checks. This is why npm/PyPI targets are fingerprinted
-   without resolving their versions, and why that weakness is documented instead of
-   fixed.
+   telemetry, not for update checks. The desktop UI loads one inlined local HTML
+   document and must not start a loopback server, load a CDN, or open a browser.
 4. **Secrets never reach disk.** Environment *values* are excluded from fingerprints;
    only key names are stored. Command-line arguments pass through
    `detect.redact_arg()` before persistence. If you add a code path that writes config
@@ -66,7 +66,8 @@ src/pindrift/
   trust.py        HMAC-SHA256 signing for shared baselines; key from env or trust.key.
   report.py       text / JSON / SARIF renderers.
   cli.py          argparse subcommands, exit codes.
-  ui/             optional Tkinter desktop UI; imported lazily by `pindrift gui`.
+  ui/             optional desktop UI: app.py (pywebview launcher), bridge.py
+                  (JS API), present.py (JSON-safe rows), web/ (inlined HTML/CSS/JS).
 tests/            full suite; fixtures/fake_mcp_server.py is a stdio MCP server.
 docs/             DESIGN.md (internals), THREAT-MODEL.md (coverage and gaps).
 examples/         demo.py reproduces the rug-pull narrative end to end.
@@ -159,9 +160,11 @@ override built-in sources. Keep env/header values out of that file.
 and UI. The three callers must agree on which servers are probed. `service` returns
 dataclasses; only the caller renders or exits.
 
-**Add a UI action** — put backend work in `ui/controller.py`, then call it from
-`ui/views.py` through the existing worker queue. Never touch Tk widgets from a worker
-thread, and never import tkinter at module import time outside `ui/`.
+**Add a UI action** — put backend work in `ui/controller.py` or `ui/present.py`, expose
+it through `ui/bridge.py`, then call it from `ui/web/app.js`. The bridge is the only
+place that talks to the WebView; never import `webview` at module import time outside
+`ui/app.py`. The page must load as one inlined HTML string, with no socket and no
+remote assets.
 
 **Add a content heuristic** — extend `HIDDEN_PATTERNS`, `INSTRUCTION_PHRASES` or
 `SENSITIVE_PATH_PATTERNS` in `detect.py`, then map it to a severity inside

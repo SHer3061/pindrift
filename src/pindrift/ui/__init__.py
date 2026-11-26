@@ -1,1 +1,1 @@
-"""Desktop UI (Tkinter, optional at runtime)."""
+"""Optional desktop UI (pywebview + local HTML/CSS/JS)."""

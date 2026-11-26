@@ -21,9 +21,9 @@ python examples/demo.py      # must still print critical drift in step 4
   specificity weighting exists because of this. Do not simplify it away.
 - Evidence printed raw ANSI escapes into the terminal. Use `differ.visible()`.
 - `pyproject.toml` references `README.md`; deleting or renaming it breaks the build.
-- Tkinter is an optional OS package on Linux. Never import it at module import time
-  outside `pindrift/ui/`; `pindrift` and `pindrift-gui` must degrade cleanly when Tk
-  is missing.
+- The desktop UI uses pywebview only through the optional `desktop` extra. Never
+  import `webview` at module import time outside `ui/app.py`; the base CLI and tests
+  must work without it. Load one inlined HTML document, never a local server or CDN.
 
 ## Tone for this codebase
 

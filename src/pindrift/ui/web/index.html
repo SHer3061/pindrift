@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <title>pindrift</title>
+  <style>/*__PINDRIFT_CSS__*/</style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">p</div>
+        <div>
+          <div class="brand-name">pindrift</div>
+          <div class="brand-sub">MCP drift monitor</div>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Primary">
+        <button class="nav-item active" data-view="overview" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-5H4v5Zm10 0h6v-9h-6v9Zm0-16v5h6V4h-6Z"/></svg>
+          <span>Overview</span>
+        </button>
+        <button class="nav-item" data-view="servers" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v5H4V5Zm0 9h16v5H4v-5Z"/></svg>
+          <span>Servers</span>
+        </button>
+        <button class="nav-item" data-view="sources" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v4H4V6Zm0 8h16v4H4v-4Z"/><path d="M8 4v16M16 4v16"/></svg>
+          <span>Sources</span>
+        </button>
+        <button class="nav-item" data-view="settings" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm8.4 4a8.4 8.4 0 0 1-.1 1.3l2 1.6-2 3.4-2.3-.9a8.4 8.4 0 0 1-2.2 1.3L15.4 22h-4l-.4-2.3a8.4 8.4 0 0 1-2.2-1.3l-2.3.9-2-3.4 2-1.6A8.4 8.4 0 0 1 6.4 12c0-.4 0-.9.1-1.3l-2-1.6 2-3.4 2.3.9a8.4 8.4 0 0 1 2.2-1.3L11.4 3h4l.4 2.3a8.4 8.4 0 0 1 2.2 1.3l2.3-.9 2 3.4-2 1.6c.1.4.1.9.1 1.3Z"/></svg>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="safety-dot"></div>
+        <div>
+          <div class="safety-title">Read-only by default</div>
+          <div class="safety-copy">Check probes only pinned servers.</div>
+        </div>
+      </div>
+      <div class="version" id="versionLabel">pindrift</div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-title" id="pageTitle">Overview</div>
+        <div class="topbar-actions">
+          <label class="search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+            <input id="searchInput" type="search" placeholder="Search servers" autocomplete="off" spellcheck="false">
+            <kbd>/</kbd>
+          </label>
+          <button class="btn ghost" id="scanBtn" type="button">Scan</button>
+          <button class="btn primary" id="checkBtn" type="button">Check</button>
+        </div>
+      </header>
+
+      <div class="content" id="content">
+        <div class="error-banner hidden" id="errorBanner" role="alert"></div>
+
+        <section class="view active" id="view-overview">
+          <div class="hero">
+            <div class="eyebrow">MCP surface</div>
+            <h1>Know what your agents can do.</h1>
+            <p class="hero-copy">pindrift pins the state you approved and shows what changed — tool by tool, capability by capability.</p>
+            <div class="hero-actions">
+              <button class="btn primary" data-action="check" type="button">Run a check</button>
+              <button class="btn ghost" data-action="servers" type="button">Browse servers</button>
+            </div>
+          </div>
+
+          <div class="metrics" id="metrics"></div>
+
+          <div class="overview-grid">
+            <article class="card baseline-card">
+              <div class="card-kicker">Baseline</div>
+              <div class="baseline-value" id="baselineValue">Loading…</div>
+              <div class="baseline-meta" id="baselineMeta"></div>
+              <div class="baseline-actions">
+                <button class="text-btn" data-view-jump="servers" type="button">Review servers</button>
+                <button class="text-btn" id="overviewCheck" type="button">Check now</button>
+              </div>
+            </article>
+            <article class="card activity-card">
+              <div class="card-kicker">This session</div>
+              <div class="activity-list" id="activityList"></div>
+            </article>
+          </div>
+
+          <article class="card overview-servers">
+            <div class="table-toolbar">
+              <div class="card-kicker">Servers at a glance</div>
+              <button class="text-btn" data-view-jump="servers" type="button">View all</button>
+            </div>
+            <div class="table-wrap overview-table">
+              <table>
+                <thead><tr><th>Server</th><th>Clients</th><th>State</th><th>Transport</th></tr></thead>
+                <tbody id="overviewRows"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <section class="view" id="view-servers">
+          <div class="split">
+            <article class="card table-card">
+              <div class="table-toolbar">
+                <div class="segmented" id="serverFilters">
+                  <button class="seg active" data-filter="all" type="button">All</button>
+                  <button class="seg" data-filter="drift" type="button">Drift</button>
+                  <button class="seg" data-filter="pinned" type="button">Pinned</button>
+                  <button class="seg" data-filter="unpinned" type="button">Unpinned</button>
+                </div>
+                <span class="muted" id="serverCount"></span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Server</th><th>Clients</th><th>State</th><th>Transport</th></tr>
+                  </thead>
+                  <tbody id="serverRows"></tbody>
+                </table>
+                <div class="empty hidden" id="serverEmpty">
+                  <div class="empty-title">No servers found</div>
+                  <div class="empty-copy">Run Scan to read the configured MCP clients.</div>
+                </div>
+              </div>
+            </article>
+
+            <aside class="card detail" id="serverDetail">
+              <div class="detail-empty">
+                <div class="empty-title">Select a server</div>
+                <div class="empty-copy">Its tools, capabilities and findings will appear here.</div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view" id="view-sources">
+          <article class="card">
+            <div class="table-toolbar">
+              <div>
+                <div class="section-title">Config sources</div>
+                <div class="muted" id="sourceMeta">Built-in and manually registered files.</div>
+              </div>
+              <div class="toolbar-actions">
+                <button class="btn ghost" id="testSourceBtn" type="button">Test</button>
+                <button class="btn ghost" id="removeSourceBtn" type="button">Remove</button>
+                <button class="btn primary" id="addSourceBtn" type="button">Add source</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Client</th><th>Scope</th><th>Origin</th><th>Status</th><th>Path</th></tr>
+                </thead>
+                <tbody id="sourceRows"></tbody>
+              </table>
+            </div>
+            <div class="source-detail" id="sourceDetail">Select a source to inspect it.</div>
+          </article>
+        </section>
+
+        <section class="view" id="view-settings">
+          <article class="card settings-card">
+            <div class="section-title">Workspace</div>
+            <p class="muted settings-copy">These preferences are stored in <code>~/.pindrift/ui.json</code>.</p>
+            <form id="settingsForm" class="settings-form">
+              <label class="field">
+                <span>Project root</span>
+                <input id="prefRoot" type="text" spellcheck="false">
+              </label>
+              <label class="field">
+                <span>Probe timeout (seconds)</span>
+                <input id="prefTimeout" type="number" min="1" max="300" step="1">
+              </label>
+              <label class="field">
+                <span>Fail on</span>
+                <select id="prefFailOn">
+                  <option value="info">info</option>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="critical">critical</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Theme</span>
+                <select id="prefTheme">
+                  <option value="system">system</option>
+                  <option value="light">light</option>
+                  <option value="dark">dark</option>
+                </select>
+              </label>
+              <label class="check-row">
+                <input id="prefProject" type="checkbox">
+                <span>Include project-scoped configs</span>
+              </label>
+              <label class="check-row">
+                <input id="prefDedupe" type="checkbox">
+                <span>Dedupe identical servers across clients</span>
+              </label>
+              <div class="form-actions">
+                <button class="btn primary" type="submit">Save settings</button>
+                <button class="btn ghost" id="resetSettings" type="button">Reset</button>
+              </div>
+            </form>
+          </article>
+        </section>
+      </div>
+
+      <div class="statusbar">
+        <span id="statusText">Loading…</span>
+        <span class="status-right" id="statusRight"></span>
+      </div>
+    </main>
+  </div>
+
+  <div class="busy hidden" id="busy" role="status" aria-live="polite">
+    <div class="busy-card">
+      <div class="spinner"></div>
+      <div>
+        <div class="busy-title" id="busyTitle">Working…</div>
+        <div class="busy-copy" id="busyCopy"></div>
+        <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-host hidden" id="modalHost"></div>
+  <div class="toast-host" id="toastHost" aria-live="polite"></div>
+
+  <script>/*__PINDRIFT_JS__*/</script>
+</body>
+</html>

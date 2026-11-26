@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-import pytest
-
-from pindrift import service, sources, store
+from pindrift import service, store
 from pindrift.cli import main as cli_main
 from pindrift.discover import ServerSpec
 from pindrift.fingerprint import build
@@ -24,8 +21,10 @@ def spec() -> ServerSpec:
     )
 
 
-def test_gui_reports_missing_tkinter(monkeypatch) -> None:
-    monkeypatch.setitem(sys.modules, "tkinter", None)
+def test_gui_reports_missing_pywebview(monkeypatch) -> None:
+    import sys
+
+    monkeypatch.setitem(sys.modules, "webview", None)
     assert ui_app.main() == 64
 
 
@@ -37,9 +36,13 @@ def test_cli_gui_dispatches_to_app(monkeypatch) -> None:
         return 0
 
     monkeypatch.setattr(ui_app, "main", fake_main)
+    assert cli_main(["gui"]) == 0
+    assert calls[0]["include_project"] is None
+    assert calls[0]["dedupe"] is None
+
     assert cli_main(["gui", "--no-dedupe", "--no-project"]) == 0
-    assert calls[0]["dedupe"] is False
-    assert calls[0]["include_project"] is False
+    assert calls[1]["dedupe"] is False
+    assert calls[1]["include_project"] is False
 
 
 def test_inventory_loads_without_probing(monkeypatch) -> None:
@@ -55,6 +58,7 @@ def test_inventory_loads_without_probing(monkeypatch) -> None:
 
     assert len(inventory.specs) == 1
     assert inventory.fingerprints[0].server_id == "test:srv"
+    assert inventory.baseline_label.startswith("baseline ")
 
 
 def test_pin_writes_to_the_store(monkeypatch) -> None:
@@ -69,6 +73,8 @@ def test_pin_writes_to_the_store(monkeypatch) -> None:
 
 
 def test_custom_source_appears_in_source_rows(tmp_path: Path) -> None:
+    from pindrift import sources
+
     config = tmp_path / "mcp.json"
     config.write_text('{"mcpServers": {}}', encoding="utf-8")
     sources.add(client="my-agent", path=config)
@@ -77,27 +83,3 @@ def test_custom_source_appears_in_source_rows(tmp_path: Path) -> None:
 
     custom = [row for row in rows if row.origin == "custom"]
     assert any(row.client == "my-agent" and row.exists for row in custom)
-
-
-def test_result_detail_escapes_evidence() -> None:
-    from pindrift.differ import compare
-
-    result = compare(None, build(spec()))
-    text = controller.result_for(result)
-    assert "no pin yet" in text
-
-
-def test_tk_app_builds() -> None:
-    tk = pytest.importorskip("tkinter")
-    from pindrift.ui.views import PindriftApp
-
-    try:
-        root = tk.Tk()
-    except tk.TclError:
-        pytest.skip("no display available")
-    root.withdraw()
-    try:
-        PindriftApp(root, controller.Settings(root=Path.cwd()))
-        root.update()
-    finally:
-        root.destroy()

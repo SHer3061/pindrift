@@ -7,6 +7,7 @@ returned dataclasses; this module does not print or exit.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -31,6 +32,9 @@ class BaselineError(RuntimeError):
 
 class SelectionError(ValueError):
     """A server selector matched nothing, or matched more than one server."""
+
+
+Progress = Callable[[int, int, str], None]
 
 
 @dataclass
@@ -170,11 +174,13 @@ def _missing_results(
     return results
 
 
-def scan(options: ScanOptions) -> ScanReport:
+def scan(options: ScanOptions, progress: Progress | None = None) -> ScanReport:
     """Compare current server state against the baseline.
 
     ``probe`` is ``auto`` (only pinned servers), ``all`` or ``none``. The default
     never executes a server the user has not already approved.
+
+    ``progress`` receives ``(done, total, server_id)`` as each target is completed.
     """
     if options.probe not in ("auto", "all", "none"):
         raise ValueError(f"unknown probe mode {options.probe!r}")
@@ -191,7 +197,8 @@ def scan(options: ScanOptions) -> ScanReport:
 
     pinned = set(payload.get("pins") or {})
     fingerprints: list[ServerFingerprint] = []
-    for spec in specs:
+    total = len(specs)
+    for index, spec in enumerate(specs):
         if options.probe == "none":
             do_probe = False
         elif options.probe == "all":
@@ -201,6 +208,8 @@ def scan(options: ScanOptions) -> ScanReport:
         fingerprints.append(
             fingerprint_spec(spec, do_probe=do_probe, timeout=options.timeout)
         )
+        if progress is not None:
+            progress(index + 1, total, spec.server_id)
 
     results = [
         compare(store.from_payload(payload, fp.server_id), fp) for fp in fingerprints

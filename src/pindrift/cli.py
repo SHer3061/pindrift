@@ -461,8 +461,8 @@ def cmd_gui(args: argparse.Namespace) -> int:
 
     return ui_main(
         root=Path(args.root) if args.root else None,
-        include_project=not args.no_project,
-        dedupe=not args.no_dedupe,
+        include_project=False if args.no_project else None,
+        dedupe=False if args.no_dedupe else None,
     )
 
 

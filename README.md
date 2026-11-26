@@ -37,12 +37,14 @@ That is the same gap software supply chain security closed a decade ago, when de
 ## Install
 
 ```bash
-pipx install pindrift
+pipx install pindrift                 # CLI, zero runtime dependencies
+pipx install "pindrift[desktop]"      # CLI + desktop UI
 # or
 pip install pindrift
 ```
 
-Python 3.10+. Zero runtime dependencies.
+Python 3.10+. The base CLI has zero runtime dependencies. The optional desktop extra
+uses [pywebview](https://pywebview.flowrl.com/) and the operating system's WebView.
 
 ## Quick start
 
@@ -66,9 +68,9 @@ Exit codes: `0` clean or below threshold, `2` findings at or above `--fail-on` (
 
 ### Desktop UI
 
-`pindrift gui` opens a native Tkinter window: Overview, Servers, Sources and
-Settings. It is optional; every CLI command works without Tk. The package also
-installs `pindrift-gui` for launching from a desktop shortcut.
+`pindrift gui` opens a native window rendered with the system WebView: a light,
+ChatGPT/Codex-style dashboard with Overview, Servers, Sources and Settings. The
+package also installs `pindrift-gui` for launching from a desktop shortcut.
 
 - **Scan** loads the current inventory without executing a server.
 - **Check** compares against the baseline and probes only servers that already have a pin.
@@ -76,11 +78,14 @@ installs `pindrift-gui` for launching from a desktop shortcut.
   executing a server.
 - **Sources** shows built-in and manually registered config files and lets you add,
   remove or test a custom path.
-- Nothing is served over a socket: the UI is a local Tk process, with no browser,
-  telemetry or update check.
+- The UI is a local HTML document inside the WebView. It does not open a socket,
+  start a browser, load a CDN, or make an update check.
 
-Linux distributions sometimes package Tk separately (`python3-tk`). Without it, the
-`gui` command explains what is missing and exits with `64`; the rest of the CLI is
+The desktop extra is optional: every CLI command works without it. On Windows the
+WebView2 Evergreen runtime is required (included with Windows 11 and most Windows 10
+installs). macOS uses WKWebView. On Linux install WebKitGTK (`python3-gi`) or inject
+the Qt backend (`pipx inject pindrift "pywebview[qt]"`). If the runtime or pywebview
+is missing, `gui` explains what is missing and exits with `64`; the rest of the CLI is
 unaffected.
 
 ### Shared signed baseline
