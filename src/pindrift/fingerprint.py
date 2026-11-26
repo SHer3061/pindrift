@@ -190,6 +190,7 @@ def build(
         server_id=spec.server_id,
         client=spec.client,
         name=spec.name,
+        clients=spec.all_clients,
         transport=spec.transport,
         command=spec.command,
         args=spec.redacted_args,
