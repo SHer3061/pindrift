@@ -23,12 +23,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
-from . import store
+from . import service, store
 from .differ import compare, visible
-from .discover import ServerSpec, collect
-from .fingerprint import build
+from .discover import ServerSpec
 from .models import Finding, Severity, severity_at_least
-from .probe import DEFAULT_TIMEOUT, probe_spec
+from .probe import DEFAULT_TIMEOUT
 
 EXIT_ALLOW = 0
 EXIT_MALFORMED = 1
@@ -174,17 +173,11 @@ def _evaluate_spec(
 
     # Only pinned servers are probed. An unapproved server is never executed just
     # because a tool call mentioned it.
-    tools, error = probe_spec(spec, timeout=timeout)
-    current = build(
-        spec,
-        tools=tools,
-        probe_error=error,
-        probed_at=store.utc_now() if tools is not None else None,
-    )
+    current = service.fingerprint_spec(spec, do_probe=True, timeout=timeout)
     result = compare(pin, current)
 
-    if tools is None:
-        detail = error or current.probe_error or "probe unavailable"
+    if current.tools is None:
+        detail = current.probe_error or "probe unavailable"
         if pin.tools is None:
             warnings.append(
                 f"{spec.server_id} has no pinned manifest and none could be captured "
@@ -222,16 +215,20 @@ def evaluate(
 
     warnings: list[str] = []
     baseline = store.load()
-    specs, errors, _ = collect(
-        include_project=include_project,
+    specs, errors, _ = service.load_specs(
         root=payload.cwd,
+        include_project=include_project,
         dedupe=True,
         aliases=store.alias_map(baseline),
     )
+    client = HOST_CLIENTS.get(payload.host)
     for error in errors:
+        if error.level == "info":
+            continue
+        if client and error.client not in (client, "sources-registry"):
+            continue
         warnings.append(f"config {error.client} {error.path}: {error.message}")
 
-    client = HOST_CLIENTS.get(payload.host)
     candidates = _matching_specs(specs, payload.server_name, client)
     if not candidates:
         warnings.append(

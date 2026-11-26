@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pindrift"
-version = "0.1.0"
+version = "0.2.0"
 description = "Continuous drift monitoring for MCP servers and agent skills. Scan once, pin the manifest, detect silent redefinition."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,6 +31,9 @@ dev = ["pytest>=7.4", "pytest-cov>=4.1"]
 
 [project.scripts]
 pindrift = "pindrift.cli:main"
+
+[project.gui-scripts]
+pindrift-gui = "pindrift.ui.app:main"
 
 [project.urls]
 Homepage = "https://github.com/SHer3061/pindrift"

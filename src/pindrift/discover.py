@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .detect import redact_arg
+from .jsoncfg import strip_jsonc
 
 try:  # Python 3.11+
     import tomllib
@@ -40,6 +41,11 @@ class ConfigSource:
     client: str
     path: Path
     scope: str  # "user" | "project"
+    format: str | None = None  # json | jsonc | toml | yaml
+    container: str | None = None
+    origin: str = "builtin"  # builtin | custom
+    supported: bool = True
+    note: str = ""
 
 
 @dataclass
@@ -89,6 +95,7 @@ class SourceError:
     client: str
     path: str
     message: str
+    level: str = "error"  # error | warning | info
 
 
 def _home() -> Path:
@@ -104,6 +111,29 @@ def _appdata() -> Path:
 
 def _mac_support() -> Path:
     return _home() / "Library" / "Application Support"
+
+
+def _xdg_config() -> Path:
+    override = os.environ.get("XDG_CONFIG_HOME")
+    if override:
+        return Path(override).expanduser()
+    return _home() / ".config"
+
+
+def _copilot_home() -> Path:
+    override = os.environ.get("COPILOT_HOME")
+    if override:
+        return Path(override).expanduser()
+    return _home() / ".copilot"
+
+
+def _app_roots() -> list[Path]:
+    """Directories where desktop apps keep settings on the current platform."""
+    if sys.platform == "win32":
+        return [_appdata()]
+    if sys.platform == "darwin":
+        return [_mac_support(), _xdg_config()]
+    return [_xdg_config(), _home() / ".local" / "share"]
 
 
 def _claude_config_path() -> Path:
@@ -168,16 +198,29 @@ def user_config_sources() -> list[ConfigSource]:
         ConfigSource("continue", _home() / ".continue" / "config.json", "user"),
     ]
 
-    # Cline ships as a VS Code extension and keeps its config in globalStorage.
+    # Cline, Roo Code and Kilo Code ship as VS Code extensions and keep their
+    # configs in globalStorage.
     for user_dir in _vscode_user_dirs():
-        sources.append(
+        sources += [
             ConfigSource(
                 "cline",
                 user_dir / "globalStorage" / "saoudrizwan.claude-dev" / "settings"
                 / "cline_mcp_settings.json",
                 "user",
-            )
-        )
+            ),
+            ConfigSource(
+                "roo-code",
+                user_dir / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings"
+                / "cline_mcp_settings.json",
+                "user",
+            ),
+            ConfigSource(
+                "kilo-code",
+                user_dir / "globalStorage" / "kilocode.kilo-code" / "settings"
+                / "mcp_settings.json",
+                "user",
+            ),
+        ]
 
     if sys.platform == "win32":
         sources += [
@@ -215,7 +258,84 @@ def user_config_sources() -> list[ConfigSource]:
             ConfigSource("zed", _home() / ".config" / "zed" / "settings.json", "user"),
         ]
 
+    sources += [
+        ConfigSource("workbuddy", _home() / ".workbuddy" / "mcp.json", "user"),
+        ConfigSource("codebuddy", _home() / ".codebuddy" / "mcp.json", "user"),
+        ConfigSource("copilot-cli", _copilot_home() / "mcp-config.json", "user"),
+        ConfigSource("lmstudio", _home() / ".lmstudio" / "mcp.json", "user"),
+        ConfigSource("warp", _home() / ".warp" / ".mcp.json", "user"),
+        ConfigSource("augment", _home() / ".augment" / "settings.json", "user"),
+        ConfigSource("kilo-code", _xdg_config() / "kilo" / "kilo.jsonc", "user", "jsonc"),
+        ConfigSource(
+            "opencode", _xdg_config() / "opencode" / "opencode.json", "user", "jsonc"
+        ),
+        ConfigSource(
+            "opencode", _xdg_config() / "opencode" / "opencode.jsonc", "user", "jsonc"
+        ),
+        ConfigSource("amazon-q", _home() / ".aws" / "amazonq" / "mcp.json", "user"),
+        ConfigSource("amazon-q", _home() / ".aws" / "amazonq" / "default.json", "user"),
+        ConfigSource("devin", _xdg_config() / "devin" / "mcp_config.json", "user"),
+        ConfigSource("trae", _home() / ".trae" / "mcp.json", "user"),
+    ]
+
+    # Workspace resources kept under the WorkBuddy home, not under the project.
+    resources = _home() / ".workbuddy" / "project-resources"
+    if resources.is_dir():
+        try:
+            projects = sorted(p for p in resources.iterdir() if p.is_dir())
+        except OSError:
+            projects = []
+        for project in projects:
+            path = project / "mcp.json"
+            if path.is_file():
+                sources.append(ConfigSource("workbuddy", path, "project"))
+
+    # Electron apps whose userData directory differs by platform.
+    for root in _app_roots():
+        sources += [
+            ConfigSource("trae", root / "Trae" / "User" / "mcp.json", "user"),
+            ConfigSource("5ire", root / "5ire" / "mcp.json", "user"),
+            ConfigSource("witsy", root / "Witsy" / "settings.json", "user"),
+            ConfigSource("jan", root / "Jan" / "data" / "mcp_config.json", "user"),
+            ConfigSource("devin", root / "Devin" / "mcp_config.json", "user"),
+        ]
+
     sources += _jetbrains_user_sources()
+    return sources
+
+
+def unsupported_sources() -> list[ConfigSource]:
+    """Known clients we can see but cannot parse without a YAML dependency.
+
+    They are surfaced in ``sources list`` and the UI rather than silently omitted:
+    "we found the file and cannot read it" is not the same as "there is nothing".
+    """
+    sources = [
+        ConfigSource(
+            "goose",
+            _appdata() / "Block" / "goose" / "config" / "config.yaml",
+            "user",
+            "yaml",
+            supported=False,
+            note="YAML config; no YAML parser is bundled",
+        ),
+        ConfigSource(
+            "goose",
+            _xdg_config() / "goose" / "config.yaml",
+            "user",
+            "yaml",
+            supported=False,
+            note="YAML config; no YAML parser is bundled",
+        ),
+        ConfigSource(
+            "dsh",
+            _home() / ".dsh" / "profiles" / "desktop" / "cordis.patch.yml",
+            "user",
+            "yaml",
+            supported=False,
+            note="Cordis YAML; DSH has no MCP config, skills are not scanned yet",
+        ),
+    ]
     return sources
 
 
@@ -229,12 +349,30 @@ def project_config_sources(root: Path | None = None) -> list[ConfigSource]:
         (".cursor/mcp.json", "cursor"),
         (".zed/settings.json", "zed"),
         (".idea/mcp.json", "jetbrains"),
+        (".github/mcp.json", "copilot-cli"),
+        (".roo/mcp.json", "roo-code"),
+        ("kilo.jsonc", "kilo-code"),
+        (".kilo/kilo.jsonc", "kilo-code"),
+        ("opencode.json", "opencode"),
+        ("opencode.jsonc", "opencode"),
+        (".opencode/opencode.json", "opencode"),
+        (".opencode/opencode.jsonc", "opencode"),
+        (".amazonq/mcp.json", "amazon-q"),
+        (".amazonq/default.json", "amazon-q"),
+        (".warp/.mcp.json", "warp"),
+        (".devin/mcp_config.json", "devin"),
+        (".trae/mcp.json", "trae"),
+        (".workbuddy/mcp.json", "workbuddy"),
+        (".codebuddy/mcp.json", "codebuddy"),
     )
     for directory in [base, *base.parents]:
         for relative, client in candidates:
             path = directory / relative
             if path.is_file():
-                found.append(ConfigSource(client, path, "project"))
+                fmt = "jsonc" if path.suffix.lower() == ".jsonc" else None
+                if client in ("kilo-code", "opencode") and fmt is None:
+                    fmt = "jsonc"
+                found.append(ConfigSource(client, path, "project", fmt))
         continue_dir = directory / ".continue" / "mcpServers"
         if continue_dir.is_dir():
             for path in sorted(continue_dir.glob("*.json")):
@@ -245,33 +383,47 @@ def project_config_sources(root: Path | None = None) -> list[ConfigSource]:
 
 
 def discover(include_project: bool = True, root: Path | None = None) -> list[ConfigSource]:
-    sources = [s for s in user_config_sources() if s.path.is_file()]
+    """Existing config files for built-in and custom sources, without duplicates."""
+    candidates = list(user_config_sources())
     if include_project:
-        seen = {s.path.resolve() for s in sources}
-        for source in project_config_sources(root):
-            if source.path.resolve() not in seen:
-                sources.append(source)
+        candidates += project_config_sources(root)
+
+    sources: list[ConfigSource] = []
+    seen: set[Path] = set()
+    for source in candidates:
+        if not source.supported or not source.path.is_file():
+            continue
+        try:
+            key = source.path.resolve()
+        except OSError:
+            key = source.path
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append(source)
     return sources
 
 
-def _extract_containers(payload: Any) -> dict[str, Any]:
+def _extract_containers(payload: Any, container: str | None = None) -> dict[str, Any]:
     """Pull the server mapping out of a config document.
 
     Handles the several shapes in the wild: ``{"mcpServers": {...}}``,
     ``{"servers": {...}}`` (VS Code), nested under ``mcp``, Zed's
     ``context_servers``, a bare mapping, and a list of entries each carrying ``name``
-    (Continue's block format).
+    (Continue's block format). ``container`` comes from a manually registered source
+    and is tried first.
     """
     if not isinstance(payload, dict):
         return {}
-    for key in SERVER_CONTAINER_KEYS:
-        container = payload.get(key)
-        if isinstance(container, dict):
-            return container
-        if isinstance(container, list):
+    keys = (container, *SERVER_CONTAINER_KEYS) if container else SERVER_CONTAINER_KEYS
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, list):
             named = {
                 str(entry["name"]): entry
-                for entry in container
+                for entry in value
                 if isinstance(entry, dict) and isinstance(entry.get("name"), str)
             }
             if named:
@@ -288,19 +440,27 @@ def _coerce_str_map(value: Any) -> dict[str, str]:
 
 
 def _command_parts(entry: dict[str, Any]) -> tuple[Any, Any, Any]:
-    """Return (command, args, env), accepting Zed's nested command object.
+    """Return (command, args, env), accepting Zed and array-style commands.
 
-    Zed historically wrote ``"command": {"path": ..., "args": [...], "env": {...}}``
-    and now also accepts the flat form every other client uses. Both are real.
+    Zed historically wrote ``"command": {"path": ..., "args": [...], "env": {...}}``.
+    Kilo and OpenCode write ``"command": ["npx", "-y", "pkg"]`` and ``environment``.
+    Both forms describe the same launch.
     """
     command = entry.get("command")
     args = entry.get("args")
     env = entry.get("env")
+    if env is None:
+        env = entry.get("environment")
     if isinstance(command, dict):
         block = command
         command = block.get("path") or block.get("command")
         args = block.get("args") if args is None else args
         env = block.get("env") if env is None else env
+    elif isinstance(command, list):
+        parts = [str(part) for part in command]
+        command = parts[0] if parts else None
+        extra = parts[1:]
+        args = [*extra, *args] if isinstance(args, list) else extra
     return command, args, env
 
 
@@ -309,7 +469,7 @@ def _build_spec(client: str, name: str, entry: dict[str, Any], source: ConfigSou
     url = entry.get("url")
     command, args, env_value = _command_parts(entry)
     env = _coerce_str_map(env_value)
-    headers = _coerce_str_map(entry.get("headers"))
+    headers = _coerce_str_map(entry.get("headers") or entry.get("staticHeaders"))
 
     if url:
         transport = "sse" if declared_type in ("sse", "") and "sse" in str(url).lower() else "http"
@@ -348,7 +508,19 @@ def parse_source(source: ConfigSource) -> tuple[list[ServerSpec], SourceError | 
         return [], SourceError(source.client, str(source.path), "not valid UTF-8")
 
     payload: Any
-    if source.path.suffix.lower() == ".toml":
+    fmt = source.format
+    if fmt is None:
+        suffix = source.path.suffix.lower()
+        fmt = "toml" if suffix == ".toml" else "jsonc" if suffix == ".jsonc" else "json"
+    if fmt == "yaml":
+        return [], SourceError(
+            source.client,
+            str(source.path),
+            "YAML configuration is not supported without a dependency",
+            level="info",
+        )
+
+    if fmt == "toml":
         if tomllib is None:
             return [], SourceError(
                 source.client, str(source.path), "TOML support requires Python 3.11+"
@@ -359,17 +531,36 @@ def parse_source(source: ConfigSource) -> tuple[list[ServerSpec], SourceError | 
             return [], SourceError(source.client, str(source.path), f"invalid TOML: {exc}")
     else:
         try:
+            if fmt == "jsonc":
+                text = strip_jsonc(text)
             payload = json.loads(text)
-        except json.JSONDecodeError as exc:
-            return [], SourceError(source.client, str(source.path), f"invalid JSON: {exc}")
+        except ValueError as exc:
+            label = "JSONC" if fmt == "jsonc" else "JSON"
+            return [], SourceError(
+                source.client, str(source.path), f"invalid {label}: {exc}"
+            )
 
-    container = _extract_containers(payload)
+    container = _extract_containers(payload, source.container)
     specs: list[ServerSpec] = []
+    disabled = 0
     for name, entry in container.items():
         if not isinstance(entry, dict):
             continue
+        if entry.get("disabled") is True:
+            disabled += 1
+            continue
         specs.append(_build_spec(source.client, str(name), entry, source))
-    return specs, None
+    error = (
+        SourceError(
+            source.client,
+            str(source.path),
+            f"{disabled} disabled server(s) skipped",
+            level="info",
+        )
+        if disabled
+        else None
+    )
+    return specs, error
 
 
 def launch_key(spec: ServerSpec) -> tuple[Any, ...]:
@@ -527,9 +718,21 @@ def collect(
     dedupe: bool = False,
     aliases: Mapping[str, str] | None = None,
 ) -> tuple[list[ServerSpec], list[SourceError], list[ConfigSource]]:
+    from . import sources as source_registry
+
     sources = discover(include_project=include_project, root=root)
+    seen = {source.path.resolve() for source in sources}
+    custom, errors = source_registry.discover_custom()
+    for source in custom:
+        try:
+            key = source.path.resolve()
+        except OSError:
+            key = source.path
+        if key not in seen:
+            seen.add(key)
+            sources.append(source)
+
     specs: list[ServerSpec] = []
-    errors: list[SourceError] = []
     for source in sources:
         parsed, error = parse_source(source)
         specs.extend(parsed)

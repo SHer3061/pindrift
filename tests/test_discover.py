@@ -253,3 +253,109 @@ def test_fingerprint_keeps_every_client_after_dedupe(tmp_path: Path) -> None:
     assert fingerprint.to_dict()["clients"] == ["claude-code", "cursor"]
     restored = ServerFingerprint.from_dict(fingerprint.to_dict())
     assert restored.all_clients == ["claude-code", "cursor"]
+
+
+def test_workbuddy_active_config_is_used_and_templates_are_excluded(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(discover_module.sys, "platform", "win32")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
+
+    active = write_json(
+        tmp_path / ".workbuddy" / "mcp.json",
+        {"mcpServers": {"files": {"command": "npx", "args": ["-y", "pkg"]}}},
+    )
+    write_json(
+        tmp_path / ".workbuddy" / "connectors" / "default" / "mcp.json",
+        {"mcpServers": {"template": {"command": "npx", "disabled": True}}},
+    )
+    project = write_json(
+        tmp_path / ".workbuddy" / "project-resources" / "p1" / "mcp.json",
+        {"mcpServers": {"issues": {"url": "https://example.com/mcp"}}},
+    )
+
+    sources = user_config_sources()
+    paths = {source.path for source in sources}
+    assert active in paths
+    assert project in paths
+    assert not any("connectors" in str(path) for path in paths)
+
+
+def test_codebuddy_empty_config_is_clean(tmp_path: Path) -> None:
+    path = write_json(tmp_path / "mcp.json", {"mcpServers": {}})
+    specs, error = parse_source(ConfigSource("codebuddy", path, "user"))
+    assert specs == []
+    assert error is None
+
+
+def test_jsonc_config_is_parsed(tmp_path: Path) -> None:
+    path = tmp_path / "kilo.jsonc"
+    path.write_text(
+        """
+        {
+          // Kilo accepts comments
+          "mcp": {
+            "files": {"command": ["npx", "-y", "pkg"], "environment": {"TOKEN": "x"}},
+          },
+        }
+        """,
+        encoding="utf-8",
+    )
+    specs, error = parse_source(
+        ConfigSource("kilo-code", path, "user", format="jsonc", container="mcp")
+    )
+    assert error is None
+    assert len(specs) == 1
+    assert specs[0].command == "npx"
+    assert specs[0].args == ["-y", "pkg"]
+    assert specs[0].env_keys == ["TOKEN"]
+
+
+def test_disabled_entries_are_skipped_with_an_info_message(tmp_path: Path) -> None:
+    path = write_json(
+        tmp_path / "mcp.json",
+        {
+            "mcpServers": {
+                "active": {"command": "npx"},
+                "off": {"command": "npx", "disabled": True},
+            }
+        },
+    )
+    specs, error = parse_source(ConfigSource("workbuddy", path, "user"))
+    assert [spec.name for spec in specs] == ["active"]
+    assert error is not None
+    assert error.level == "info"
+    assert "1 disabled" in error.message
+
+
+def test_project_config_sources_cover_new_clients(tmp_path: Path) -> None:
+    write_json(tmp_path / ".workbuddy" / "mcp.json", {"mcpServers": {}})
+    write_json(tmp_path / ".roo" / "mcp.json", {"mcpServers": {}})
+    write_json(tmp_path / ".warp" / ".mcp.json", {"mcpServers": {}})
+    found = project_config_sources(tmp_path)
+    clients = {source.client for source in found}
+    assert {"workbuddy", "roo-code", "warp"} <= clients
+
+
+def test_discover_deduplicates_the_same_real_path(tmp_path: Path, monkeypatch) -> None:
+    path = write_json(tmp_path / "mcp.json", {"mcpServers": {}})
+    source = ConfigSource("one", path, "user")
+    monkeypatch.setattr(
+        discover_module, "user_config_sources", lambda: [source, ConfigSource("two", path, "user")]
+    )
+    found = discover_module.discover(include_project=False)
+    assert len(found) == 1
+
+
+def test_yaml_source_is_reported_not_parsed(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("extensions: {}\n", encoding="utf-8")
+    specs, error = parse_source(
+        ConfigSource("goose", path, "user", format="yaml", supported=False)
+    )
+    assert specs == []
+    assert error is not None
+    assert error.level == "info"
+    assert "YAML" in error.message

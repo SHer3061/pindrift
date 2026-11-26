@@ -11,27 +11,30 @@ Design notes:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import __version__, store, trust
+from . import __version__, service, sources, store, trust
 from .capability import FACET_BY_NAME, infer_capabilities, server_capabilities
 from .detect import analyse_text
 from .differ import compare, summarise
-from .discover import ServerSpec, collect
-from .fingerprint import build
+from .discover import (
+    ServerSpec,
+    parse_source,
+    project_config_sources,
+    unsupported_sources,
+    user_config_sources,
+)
 from .hook import SUPPORTED_HOSTS, run_hook
 from .models import (
-    Finding,
-    ServerFingerprint,
     ServerResult,
     Severity,
     State,
-    severity_at_least,
 )
-from .probe import DEFAULT_TIMEOUT, probe_spec
+from .probe import DEFAULT_TIMEOUT
 from .report import (
     render_inventory,
     render_json,
@@ -52,57 +55,27 @@ def _now_label() -> str:
 def _load_specs(
     args: argparse.Namespace, aliases: dict[str, str] | None = None
 ) -> list[ServerSpec]:
-    specs, errors, _ = collect(
-        include_project=not getattr(args, "no_project", False),
+    specs, errors, _ = service.load_specs(
         root=Path(getattr(args, "root", None) or Path.cwd()),
+        include_project=not getattr(args, "no_project", False),
         dedupe=getattr(args, "dedupe", False),
         aliases=aliases,
     )
     for error in errors:
-        print(f"warning: {error.client} {error.path}: {error.message}", file=sys.stderr)
+        if error.level != "info":
+            print(f"warning: {error.client} {error.path}: {error.message}", file=sys.stderr)
     return specs
 
 
-def _fingerprint_spec(
-    spec: ServerSpec, do_probe: bool, timeout: float
-) -> ServerFingerprint:
-    if not do_probe:
-        return build(spec)
-    tools, error = probe_spec(spec, timeout=timeout)
-    return build(
-        spec,
-        tools=tools,
-        probe_error=error,
-        probed_at=store.utc_now() if tools is not None else None,
-    )
-
-
 def _select(specs: list[ServerSpec], wanted: list[str]) -> list[ServerSpec]:
-    if not wanted:
-        return specs
-    selected: list[ServerSpec] = []
-    for token in wanted:
-        matches = [
-            s
-            for s in specs
-            if token in s.all_aliases or s.server_id == token or s.name == token
-        ]
-        if not matches:
-            matches = [s for s in specs if token.lower() in s.server_id.lower()]
-        if not matches:
-            raise SystemExit(f"no MCP server matched {token!r}")
-        if len(matches) > 1:
-            options = ", ".join(s.server_id for s in matches)
-            raise SystemExit(f"{token!r} is ambiguous, matched: {options}")
-        selected.append(matches[0])
-    return selected
+    return service.select(specs, wanted)
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
     specs = _load_specs(args, store.alias_map(store.load()))
-    fingerprints = [
-        _fingerprint_spec(spec, do_probe=args.probe, timeout=args.timeout) for spec in specs
-    ]
+    fingerprints = service.fingerprint_specs(
+        specs, do_probe=args.probe, timeout=args.timeout
+    )
     if args.format == "json":
         print(
             render_json(
@@ -113,29 +86,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
     else:
         print(render_inventory(fingerprints, store.pinned_ids()))
     return EXIT_OK
-
-
-def _verified_baseline(path: Path) -> dict[str, object]:
-    """Load a repo-committed baseline and refuse to use it unverified.
-
-    A baseline that cannot be verified is worse than no baseline: it looks like a
-    statement of approved state while anyone who can edit the file controls the
-    comparison. Exit before comparing anything.
-    """
-    try:
-        payload = store.load_path(path)
-    except FileNotFoundError:
-        print(f"pindrift: baseline not found: {path}", file=sys.stderr)
-        raise SystemExit(EXIT_UNTRUSTED)
-    except (OSError, ValueError) as exc:
-        print(f"pindrift: baseline is not a pin file: {path}: {exc}", file=sys.stderr)
-        raise SystemExit(EXIT_UNTRUSTED)
-
-    verdict = trust.verify(payload)
-    if not verdict.ok:
-        print(f"pindrift: refusing to use baseline {path}: {verdict.detail}", file=sys.stderr)
-        raise SystemExit(EXIT_UNTRUSTED)
-    return payload
 
 
 def cmd_pin(args: argparse.Namespace) -> int:
@@ -181,10 +131,9 @@ def cmd_pin(args: argparse.Namespace) -> int:
         print("no MCP servers found to pin", file=sys.stderr)
         return EXIT_USAGE
 
-    fingerprints = [
-        _fingerprint_spec(spec, do_probe=not args.no_probe, timeout=args.timeout)
-        for spec in specs
-    ]
+    fingerprints = service.fingerprint_specs(
+        specs, do_probe=not args.no_probe, timeout=args.timeout
+    )
     try:
         written = store.put_many(fingerprints, reason="cli-pin", path=target)
     except (OSError, ValueError) as exc:
@@ -200,103 +149,49 @@ def cmd_pin(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _missing_results(payload: dict[str, object], seen: set[str]) -> list[ServerResult]:
-    """Pinned servers that no longer appear in any config.
-
-    This is reported rather than ignored: quietly removing a server from the config is
-    also how you stop being monitored.
-    """
-    results: list[ServerResult] = []
-    for server_id in sorted(set(payload.get("pins") or {}) - seen):
-        pin = store.from_payload(payload, server_id)
-        if pin is None:
-            continue
-        results.append(
-            ServerResult(
-                fingerprint=pin,
-                state=State.MISSING,
-                findings=[
-                    Finding(
-                        server_id=server_id,
-                        kind="server_missing",
-                        severity=Severity.MEDIUM,
-                        title="pinned server is no longer configured",
-                        detail=(
-                            "Either it was uninstalled, or the config entry was removed. "
-                            "If that was not you, treat it as tampering."
-                        ),
-                        evidence=[f"last seen in {pin.source_config}"] if pin.source_config else [],
-                    )
-                ],
-            )
-        )
-    return results
-
-
 def _run_check(args: argparse.Namespace) -> tuple[list[ServerResult], int]:
-    baseline_path = getattr(args, "baseline", None)
-    if baseline_path:
-        baseline_payload = _verified_baseline(Path(baseline_path).expanduser())
-        baseline = baseline_payload.get("updated_at") or "no baseline"
-        baseline_label = f"baseline {baseline} ({baseline_path})"
-    else:
-        baseline_payload = store.load()
-        baseline = baseline_payload.get("updated_at") or "no baseline"
-        baseline_label = f"baseline {baseline}"
+    probe = "none" if args.no_probe else "all" if args.probe_all else "auto"
+    options = service.ScanOptions(
+        root=Path(getattr(args, "root", None) or Path.cwd()),
+        include_project=not getattr(args, "no_project", False),
+        dedupe=getattr(args, "dedupe", False),
+        probe=probe,
+        timeout=args.timeout,
+        fail_on=Severity(args.fail_on),
+        baseline_path=(
+            Path(args.baseline).expanduser() if getattr(args, "baseline", None) else None
+        ),
+        wanted=list(args.servers),
+    )
+    try:
+        report = service.scan(options)
+    except service.BaselineError as exc:
+        print(f"pindrift: {exc}", file=sys.stderr)
+        return [], EXIT_UNTRUSTED
 
-    specs = _load_specs(args, store.alias_map(baseline_payload))
-    if args.servers:
-        specs = _select(specs, args.servers)
-
-    pinned = set(baseline_payload.get("pins") or {})
-    if not pinned:
+    for error in report.errors:
+        if error.level != "info":
+            print(f"warning: {error.client} {error.path}: {error.message}", file=sys.stderr)
+    if not report.pinned_ids:
         print(
             "no pins yet. Run `pindrift pin --all` after reviewing what is installed.",
             file=sys.stderr,
         )
 
-    fingerprints: list[ServerFingerprint] = []
-    for spec in specs:
-        if args.no_probe:
-            do_probe = False
-        elif args.probe_all:
-            do_probe = True
-        else:
-            do_probe = spec.server_id in pinned
-        fingerprints.append(_fingerprint_spec(spec, do_probe=do_probe, timeout=args.timeout))
-
-    results = [
-        compare(store.from_payload(baseline_payload, fp.server_id), fp) for fp in fingerprints
-    ]
-    results.extend(_missing_results(baseline_payload, {fp.server_id for fp in fingerprints}))
-    results.sort(key=lambda r: (r.state == State.OK, r.fingerprint.server_id))
-
-    summary = summarise(results)
-    threshold = Severity(args.fail_on)
-
     if args.format == "json":
-        print(render_json(results, summary))
+        print(render_json(report.results, report.summary))
     elif args.format == "sarif":
-        print(render_sarif(results))
+        print(render_sarif(report.results))
     else:
         print(
             render_text(
-                results,
-                summary,
-                baseline_label=f"{baseline_label}  |  {_now_label()}",
+                report.results,
+                report.summary,
+                baseline_label=f"{report.baseline_label}  |  {_now_label()}",
                 verbose=args.verbose,
             )
         )
-
-    worst = [
-        f.severity
-        for r in results
-        for f in r.findings
-        if f.kind != "unpinned"
-    ]
-    if worst and any(severity_at_least(s, threshold) for s in worst):
-        return results, EXIT_FINDINGS
-    return results, EXIT_OK
+    return report.results, report.exit_code
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -312,7 +207,9 @@ def cmd_approve(args: argparse.Namespace) -> int:
         return EXIT_USAGE
 
     for spec in specs:
-        current = _fingerprint_spec(spec, do_probe=not args.no_probe, timeout=args.timeout)
+        current = service.fingerprint_spec(
+            spec, do_probe=not args.no_probe, timeout=args.timeout
+        )
         pin = store.get(current.server_id)
         if pin is not None:
             result = compare(pin, current)
@@ -334,7 +231,9 @@ def cmd_caps(args: argparse.Namespace) -> int:
     specs = _load_specs(args, store.alias_map(store.load()))
     specs = _select(specs, args.servers)
     for spec in specs:
-        fp = _fingerprint_spec(spec, do_probe=not args.no_probe, timeout=args.timeout)
+        fp = service.fingerprint_spec(
+            spec, do_probe=not args.no_probe, timeout=args.timeout
+        )
         print(f"{fp.server_id}  [{fp.transport}]  artifact={fp.artifact.kind}")
         if fp.tools is None:
             print(f"  manifest unavailable: {fp.probe_error}")
@@ -434,6 +333,137 @@ def cmd_trust_verify(args: argparse.Namespace) -> int:
         return EXIT_OK
     print(f"{path}: {verdict.detail}", file=sys.stderr)
     return EXIT_UNTRUSTED
+
+
+def cmd_sources_list(args: argparse.Namespace) -> int:
+    try:
+        custom = sources.load()
+    except sources.SourceRegistryError as exc:
+        print(f"pindrift: {exc}", file=sys.stderr)
+        return EXIT_FINDINGS
+
+    rows: list[dict[str, object]] = []
+    for source in [
+        *user_config_sources(),
+        *project_config_sources(Path(args.root) if args.root else Path.cwd()),
+        *unsupported_sources(),
+    ]:
+        if not source.path.is_file():
+            continue
+        rows.append(
+            {
+                "client": source.client,
+                "path": str(source.path),
+                "scope": source.scope,
+                "origin": source.origin,
+                "format": source.format or source.path.suffix.lstrip(".") or "json",
+                "exists": True,
+                "supported": source.supported,
+                "note": source.note,
+            }
+        )
+    for entry in custom:
+        rows.append(
+            {
+                "client": entry.client,
+                "path": str(entry.path),
+                "scope": entry.scope,
+                "origin": "custom",
+                "format": entry.format or entry.path.suffix.lstrip(".") or "json",
+                "exists": entry.path.is_file(),
+                "supported": True,
+                "note": "" if entry.path.is_file() else "configured but missing",
+            }
+        )
+
+    if args.format == "json":
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+        return EXIT_OK
+
+    if not rows:
+        print("no config sources found")
+        return EXIT_OK
+    for row in rows:
+        status = "ok" if row["exists"] else "missing"
+        if not row["supported"]:
+            status = "unsupported"
+        print(
+            f"{row['client']:<18} {row['scope']:<8} {row['origin']:<8} "
+            f"{status:<11} {row['path']}"
+        )
+        if row["note"]:
+            print(f"{'':<48}{row['note']}")
+    return EXIT_OK
+
+
+def cmd_sources_add(args: argparse.Namespace) -> int:
+    try:
+        source = sources.add(
+            client=args.client,
+            path=args.path,
+            scope=args.scope,
+            format=args.format,
+            container=args.container,
+        )
+    except sources.SourceRegistryError as exc:
+        print(f"pindrift: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    print(f"added {source.id}  {source.client}: {source.path}")
+    return EXIT_OK
+
+
+def cmd_sources_remove(args: argparse.Namespace) -> int:
+    try:
+        removed = sources.remove(args.identifier)
+    except sources.SourceRegistryError as exc:
+        print(f"pindrift: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    if not removed:
+        print(f"no source matched {args.identifier!r}", file=sys.stderr)
+        return 1
+    print(f"removed {args.identifier}")
+    return EXIT_OK
+
+
+def cmd_sources_test(args: argparse.Namespace) -> int:
+    try:
+        entries = sources.load()
+    except sources.SourceRegistryError as exc:
+        print(f"pindrift: {exc}", file=sys.stderr)
+        return EXIT_FINDINGS
+
+    matches = [
+        entry
+        for entry in entries
+        if args.identifier in (entry.id, str(entry.path), entry.client)
+    ]
+    if not matches:
+        print(f"no source matched {args.identifier!r}", file=sys.stderr)
+        return 1
+
+    code = EXIT_OK
+    for entry in matches:
+        if not entry.path.is_file():
+            print(f"{entry.client}: {entry.path}: missing", file=sys.stderr)
+            code = 1
+            continue
+        specs, error = parse_source(entry.to_config_source())
+        print(f"{entry.client}: {entry.path}: {len(specs)} server(s)")
+        if error:
+            print(f"  {error.level}: {error.message}")
+            if error.level == "error":
+                code = 1
+    return code
+
+
+def cmd_gui(args: argparse.Namespace) -> int:
+    from .ui.app import main as ui_main
+
+    return ui_main(
+        root=Path(args.root) if args.root else None,
+        include_project=not args.no_project,
+        dedupe=not args.no_dedupe,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -547,6 +577,42 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hook.set_defaults(func=cmd_hook)
 
+    gui = subparsers.add_parser("gui", help="open the desktop drift monitor")
+    gui.add_argument("--root", help="project root for project-scoped configs")
+    gui.add_argument("--no-project", action="store_true", help="ignore project-scoped configs")
+    gui.add_argument(
+        "--no-dedupe",
+        action="store_true",
+        help="show every client as a separate server (default: dedupe on)",
+    )
+    gui.set_defaults(func=cmd_gui)
+
+    sources_parser = subparsers.add_parser(
+        "sources", help="list and manage manually registered config files"
+    )
+    sources_sub = sources_parser.add_subparsers(dest="sources_command", required=True)
+
+    sources_list = sources_sub.add_parser("list", help="show built-in and custom sources")
+    sources_list.add_argument("--root", help="project root for project-scoped configs")
+    sources_list.add_argument("--format", choices=("text", "json"), default="text")
+    sources_list.set_defaults(func=cmd_sources_list)
+
+    sources_add = sources_sub.add_parser("add", help="register another client config file")
+    sources_add.add_argument("--client", required=True, help="client name shown in reports")
+    sources_add.add_argument("--path", required=True, help="absolute path to the config file")
+    sources_add.add_argument("--scope", choices=("user", "project"), default="user")
+    sources_add.add_argument("--format", choices=("json", "jsonc", "toml"))
+    sources_add.add_argument("--container", help="top-level key holding the server map")
+    sources_add.set_defaults(func=cmd_sources_add)
+
+    sources_remove = sources_sub.add_parser("remove", help="remove a custom source")
+    sources_remove.add_argument("identifier", help="source id or path")
+    sources_remove.set_defaults(func=cmd_sources_remove)
+
+    sources_test = sources_sub.add_parser("test", help="parse one custom source")
+    sources_test.add_argument("identifier", help="source id or path")
+    sources_test.set_defaults(func=cmd_sources_test)
+
     trust_parser = subparsers.add_parser("trust", help="sign and verify shared baselines")
     trust_sub = trust_parser.add_subparsers(dest="trust_command", required=True)
 
@@ -579,6 +645,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except service.SelectionError as exc:
+        print(f"pindrift: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     except trust.TrustError as exc:
         print(f"pindrift: {exc}", file=sys.stderr)
         return EXIT_USAGE

@@ -208,10 +208,7 @@ def test_pin_refuses_to_re_sign_an_unverified_baseline(
     assert "signature" not in store.load_path(baseline)
 
     monkeypatch.setenv(trust.ENV_KEY, "33" * trust.KEY_BYTES)
-    monkeypatch.setattr(cli, "_load_specs", lambda args: ["fake-spec"])
-    monkeypatch.setattr(
-        cli, "_fingerprint_spec", lambda spec, do_probe, timeout: make_fingerprint()
-    )
+    monkeypatch.setattr(cli, "_load_specs", lambda args, aliases=None: ["fake-spec"])
 
     code = cli_main(["pin", "--all", "--baseline", str(baseline)])
 
