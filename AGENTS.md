@@ -113,6 +113,19 @@ python examples/demo.py                            # must still reproduce the na
   limits, update `docs/DESIGN.md`; if you change what is or is not detected, update
   `docs/THREAT-MODEL.md`. The threat model is a promise — keep it accurate.
 
+## Reporting language
+
+Report to the human in **Simplified Chinese**: status updates, explanations, questions,
+summaries, and anything you say back in a chat. Say it directly rather than translating
+English phrasing word for word.
+
+Everything that lives in the repository stays in **English**: code, comments,
+docstrings, commit messages, and every file under `docs/`, plus `README.md` and this
+file.
+
+Do not translate quoted material. File paths, command output and error messages keep
+their original form — a translated error message is a useless error message.
+
 ## Extension recipes
 
 **Add a capability facet** — append a `Facet` to `capability.FACETS` with `name`,
