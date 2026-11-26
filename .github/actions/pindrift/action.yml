@@ -40,6 +40,13 @@ inputs:
     description: Project root for project-scoped configs. Empty uses the workspace.
     required: false
     default: ""
+  dedupe:
+    description: >-
+      Collapse one server configured identically by several clients into one result.
+      Must match how the baseline was pinned: the merged id is the first client
+      alphabetically.
+    required: false
+    default: "false"
   no-project:
     description: Ignore project-scoped configs and read only user-level ones.
     required: false
@@ -110,6 +117,7 @@ runs:
         SARIF_FILE: ${{ inputs.sarif-file }}
         ROOT: ${{ inputs.root }}
         NO_PROJECT: ${{ inputs.no-project }}
+        DEDUPE: ${{ inputs.dedupe }}
         TIMEOUT: ${{ inputs.timeout }}
       run: |
         set +e
@@ -119,6 +127,9 @@ runs:
         fi
         if [ "$NO_PROJECT" = "true" ]; then
           args+=(--no-project)
+        fi
+        if [ "$DEDUPE" = "true" ]; then
+          args+=(--dedupe)
         fi
         python -m pindrift "${args[@]}" > "$SARIF_FILE"
         code=$?

@@ -83,10 +83,12 @@ steps:
 ```
 
 A runner with no baseline would verify nothing, so the action refuses to run without
-one rather than reporting a clean result. Each finding kind maps to a stable SARIF
-rule whose `helpUri` points at the matching section of the threat model, and each
-result carries a `partialFingerprints` entry so code scanning dedupes the same drift
-across runs instead of reopening it.
+one rather than reporting a clean result. Set `dedupe: true` only when the baseline
+was pinned with `--dedupe`: the merged server keeps the first client alphabetically
+as its id. Each finding kind maps to a stable SARIF rule whose `helpUri` points at
+the matching section of the threat model, and each result carries a
+`partialFingerprints` entry so code scanning dedupes the same drift across runs
+instead of reopening it.
 
 ### Drift in practice
 

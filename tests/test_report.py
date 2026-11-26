@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from pindrift import report
+from pindrift.differ import summarise
 from pindrift.models import (
     Artifact,
     Finding,
@@ -68,11 +69,15 @@ def document_headings() -> set[str]:
     return anchors
 
 
-def make_fingerprint(server_id: str = "claude-code:demo-fs") -> ServerFingerprint:
+def make_fingerprint(
+    server_id: str = "claude-code:demo-fs",
+    clients: list[str] | None = None,
+) -> ServerFingerprint:
     return ServerFingerprint(
         server_id=server_id,
         client="claude-code",
         name="demo-fs",
+        clients=list(clients or []),
         transport="stdio",
         source_config="/home/analyst/.claude.json",
         artifact=Artifact(kind="local", target="/opt/demo/server.py", sha256="a" * 64),
@@ -82,9 +87,10 @@ def make_fingerprint(server_id: str = "claude-code:demo-fs") -> ServerFingerprin
 def make_result(
     *findings: Finding,
     server_id: str = "claude-code:demo-fs",
+    clients: list[str] | None = None,
 ) -> ServerResult:
     return ServerResult(
-        fingerprint=make_fingerprint(server_id),
+        fingerprint=make_fingerprint(server_id, clients),
         state=State.DRIFT,
         findings=list(findings),
     )
@@ -220,6 +226,40 @@ def test_unpinned_info_is_not_reported() -> None:
     )
     assert results_of(document) == []
     assert rules_of(document) == []
+
+
+# -- dedupe provenance ------------------------------------------------------------
+
+
+def test_single_client_is_recorded_as_a_one_element_list() -> None:
+    result = results_of(render(make_result(finding())))[0]
+    assert result["properties"]["clients"] == ["claude-code"]
+
+
+def test_deduped_server_keeps_every_client_in_sarif() -> None:
+    result = results_of(
+        render(make_result(finding(), clients=["claude-code", "cursor"]))
+    )[0]
+    assert result["properties"]["clients"] == ["claude-code", "cursor"]
+
+
+def test_text_and_json_name_every_client() -> None:
+    result = make_result(finding(), clients=["claude-code", "cursor"])
+
+    text = report.render_text([result], summarise([result]), baseline_label="test")
+    assert "clients   claude-code, cursor" in text
+
+    payload = json.loads(report.render_json([result], summarise([result])))
+    assert payload["servers"][0]["clients"] == ["claude-code", "cursor"]
+
+
+def test_partial_fingerprint_ignores_the_client_list() -> None:
+    one = results_of(render(make_result(finding())))[0]
+    two = results_of(
+        render(make_result(finding(), clients=["claude-code", "cursor"]))
+    )[0]
+
+    assert one["partialFingerprints"] == two["partialFingerprints"]
 
 
 # -- dedupe -----------------------------------------------------------------------
