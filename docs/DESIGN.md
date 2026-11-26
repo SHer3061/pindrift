@@ -49,7 +49,8 @@ normalises that to the same `ServerSpec` every other client produces.
 env keys, url and header keys. The first client alphabetically supplies the
 `server_id`; `clients` keeps every client so a report can name them all. Entries with
 the same name but a different launch are deliberately not merged: that difference is
-the drift this tool exists to show.
+the drift this tool exists to show. The id is consequently sensitive to which clients
+are present; making it stable is T3b.
 
 ## The three fingerprint layers
 
@@ -141,6 +142,9 @@ through `redact_arg` first.
 * Continue's primary config is `~/.continue/config.yaml`. A YAML parser is not worth
   a runtime dependency, so only Continue's JSON forms are discovered; the YAML file is
   ignored rather than reported as broken.
+* A deduped server's id is the first client alphabetically, so adding a client that
+  sorts earlier renames it and orphans the old pin. Keep `--dedupe` opt-in until T3b
+  lands.
 * Manifest capture requires a working stdio handshake. Servers that require
   authentication before `tools/list` will report `unknown`.
 * `watch` polls. A host hook that checks immediately before each tool call is stronger

@@ -163,7 +163,7 @@ $ pindrift scan --dedupe
     config    /repo/.mcp.json
 ```
 
-Pass `--dedupe` consistently to `pin`, `check`, `approve` and `watch`: the merged server keeps the first client as its id, so a baseline pinned without the flag will not match the deduped id.
+Pass `--dedupe` consistently to `pin`, `check`, `approve` and `watch`: the merged server keeps the first client as its id, so a baseline pinned without the flag will not match the deduped id. Adding a client that sorts earlier also renames that id, so keep dedupe opt-in until stable pin identity lands (see T3b in [`docs/TASKS.md`](docs/TASKS.md)).
 
 ## Status
 
