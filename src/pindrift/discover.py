@@ -10,12 +10,14 @@ monitor that crashes on the first malformed config is not a monitor.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .detect import redact_arg
 
@@ -56,10 +58,17 @@ class ServerSpec:
     raw: dict[str, Any] = field(default_factory=dict)
     clients: list[str] = field(default_factory=list)
     source_paths: list[str] = field(default_factory=list)
+    canonical_id: str | None = None
+    aliases: list[str] = field(default_factory=list)
 
     @property
     def server_id(self) -> str:
-        return f"{self.client}:{self.name}"
+        return self.canonical_id or f"{self.client}:{self.name}"
+
+    @property
+    def all_aliases(self) -> list[str]:
+        """Every ``client:name`` this spec was discovered under."""
+        return list(self.aliases) or [self.server_id]
 
     @property
     def all_clients(self) -> list[str]:
@@ -346,7 +355,7 @@ def parse_source(source: ConfigSource) -> tuple[list[ServerSpec], SourceError | 
             )
         try:
             payload = tomllib.loads(text)
-        except Exception as exc:  # tomllib raises TOMLDecodeError
+        except ValueError as exc:  # TOMLDecodeError is a ValueError
             return [], SourceError(source.client, str(source.path), f"invalid TOML: {exc}")
     else:
         try:
@@ -381,38 +390,134 @@ def launch_key(spec: ServerSpec) -> tuple[Any, ...]:
     )
 
 
-def dedupe_specs(specs: list[ServerSpec]) -> list[ServerSpec]:
+def _resolve_alias(alias: str, aliases: Mapping[str, str] | None) -> tuple[str | None, bool]:
+    """Follow a ``client:name`` alias to its persisted canonical id.
+
+    The second element says whether the alias was known at all. A self-mapping (a
+    pin written before aliases existed) therefore counts as known: the group must
+    keep resolving to that pin instead of falling back to the alphabetically first
+    client.
+    """
+    if not aliases or alias not in aliases:
+        return None, False
+    current = alias
+    seen: set[str] = set()
+    while current not in seen:
+        seen.add(current)
+        target = aliases.get(current)
+        if not target:
+            break
+        current = target
+    return current, True
+
+
+def _identity_suffix(spec: ServerSpec) -> str:
+    """Short, deterministic token for two same-named servers with different launches.
+
+    Only appended when a canonical id would otherwise be duplicated. The id is
+    persisted in the pin file once the server is pinned, so a later launch change
+    does not rename it.
+    """
+    blob = json.dumps(launch_key(spec), ensure_ascii=False, default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
+
+
+@dataclass
+class _Group:
+    primary: ServerSpec
+    ordered: list[ServerSpec]
+    aliases: list[str]
+    candidate: str
+    mapped: bool
+
+
+def dedupe_specs(
+    specs: list[ServerSpec], aliases: Mapping[str, str] | None = None
+) -> list[ServerSpec]:
     """Collapse identical launch definitions discovered through several clients.
 
     One server configured in three clients is one risk, not three, and probing it
-    three times is three chances to execute the same code. The merged spec keeps the
-    first client as ``client`` (and therefore as its ``server_id``) but records every
-    client and source path so the report can still name them all.
+    three times is three chances to execute the same code. The merged spec keeps one
+    canonical id and records every ``client:name`` alias so the report can still
+    name them all.
+
+    ``aliases`` maps every alias seen before to the id it was pinned under. A group
+    that contains a known alias keeps that id, which is what makes the identity
+    survive both adding a client and a legitimate launch change. When every recorded
+    alias is gone, an unambiguous pin with the same name is reused instead. Without
+    either signal the first client alphabetically supplies the id, exactly as before,
+    and the pin operation persists the group so the next run is stable.
 
     Entries with the same name and a *different* launch definition are kept apart on
     purpose: that difference is real drift, not duplication.
-
-    The id is therefore client-dependent: adding a client that sorts earlier renames
-    the merged server, which makes an existing pin look missing and the server look
-    new. Stable pin identity is tracked as T3b in docs/TASKS.md; until it lands, keep
-    the same client set between ``pin`` and ``check``.
     """
     groups: dict[tuple[Any, ...], list[ServerSpec]] = {}
+    name_counts: dict[str, int] = {}
     for spec in specs:
         groups.setdefault(launch_key(spec), []).append(spec)
+        name_counts[spec.name] = name_counts.get(spec.name, 0) + 1
 
-    merged: list[ServerSpec] = []
+    # A pin key always aliases itself, so its suffix is the server name. When a
+    # client that was never pinned is the only remaining config for that name, the
+    # name is enough to keep the original id -- the explicit "match by name" rule for
+    # losing every recorded alias. It is only used when the name is unambiguous both
+    # among pins and within this run.
+    pinned_by_name: dict[str, set[str]] = {}
+    for alias, canonical in (aliases or {}).items():
+        _, separator, name = alias.partition(":")
+        if separator:
+            pinned_by_name.setdefault(name, set()).add(canonical)
+
+    entries: list[_Group] = []
     for group in groups.values():
         ordered = sorted(group, key=lambda s: (s.client, s.scope, s.source_path))
         primary = ordered[0]
+        group_aliases = sorted({f"{s.client}:{s.name}" for s in ordered})
+        resolved = {
+            target
+            for alias in group_aliases
+            for target, known in [_resolve_alias(alias, aliases)]
+            if known and target
+        }
+        mapped = bool(resolved)
+        if resolved:
+            candidate = min(resolved)
+        elif name_counts[primary.name] == 1 and len(pinned_by_name.get(primary.name, ())) == 1:
+            candidate = next(iter(pinned_by_name[primary.name]))
+            mapped = True
+        else:
+            candidate = group_aliases[0]
+        entries.append(_Group(primary, ordered, group_aliases, candidate, mapped))
+
+    counts: dict[str, int] = {}
+    for entry in entries:
+        counts[entry.candidate] = counts.get(entry.candidate, 0) + 1
+
+    used: set[str] = set()
+    merged: list[ServerSpec] = []
+    for entry in sorted(entries, key=lambda e: (e.candidate, _identity_suffix(e.primary))):
+        primary = entry.primary
+        candidate = entry.candidate
+        # An unpinned collision cannot be authoritative: give both groups a stable
+        # launch-derived suffix rather than letting client order pick a winner.
+        if counts[candidate] > 1 and not entry.mapped:
+            candidate = f"{candidate}#{_identity_suffix(primary)}"
+        # Two pins that were deliberately mapped to one id are already inconsistent;
+        # keep the first and make the other visible under its own id rather than
+        # silently dropping a pinned server from the results.
+        if candidate in used:
+            candidate = f"{candidate}#{_identity_suffix(primary)}"
+        used.add(candidate)
         merged.append(
             replace(
                 primary,
-                clients=sorted({s.client for s in ordered}),
-                source_paths=sorted({s.source_path for s in ordered}),
+                canonical_id=candidate,
+                aliases=entry.aliases,
+                clients=sorted({s.client for s in entry.ordered}),
+                source_paths=sorted({s.source_path for s in entry.ordered}),
             )
         )
-    merged.sort(key=lambda s: (s.name, s.client, s.source_path))
+    merged.sort(key=lambda s: (s.name, s.server_id, s.source_path))
     return merged
 
 
@@ -420,6 +525,7 @@ def collect(
     include_project: bool = True,
     root: Path | None = None,
     dedupe: bool = False,
+    aliases: Mapping[str, str] | None = None,
 ) -> tuple[list[ServerSpec], list[SourceError], list[ConfigSource]]:
     sources = discover(include_project=include_project, root=root)
     specs: list[ServerSpec] = []
@@ -430,7 +536,7 @@ def collect(
         if error:
             errors.append(error)
     if dedupe:
-        specs = dedupe_specs(specs)
+        specs = dedupe_specs(specs, aliases)
     return specs, errors, sources
 
 

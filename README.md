@@ -95,7 +95,7 @@ permissions:
 
 steps:
   - uses: actions/checkout@v4
-  - uses: SHer/pindrift/.github/actions/pindrift@main
+  - uses: SHer3061/pindrift/.github/actions/pindrift@main
     with:
       fail-on: high
       pins-file: .github/pindrift/pins.json   # a baseline committed to the repository
@@ -103,11 +103,12 @@ steps:
 
 A runner with no baseline would verify nothing, so the action refuses to run without
 one rather than reporting a clean result. Set `dedupe: true` only when the baseline
-was pinned with `--dedupe`: the merged server keeps the first client alphabetically
-as its id. Each finding kind maps to a stable SARIF rule whose `helpUri` points at
-the matching section of the threat model, and each result carries a
-`partialFingerprints` entry so code scanning dedupes the same drift across runs
-instead of reopening it.
+was pinned with `--dedupe`: a deduped server keeps the id it was first pinned under,
+and pinning records every `client:name` alias, so a client that was present at pin
+time can be added or removed without renaming it. Each finding kind maps to a stable
+SARIF rule whose `helpUri` points at the matching section of the threat model, and
+each result carries a `partialFingerprints` entry so code scanning dedupes the same
+drift across runs instead of reopening it.
 
 ### Drift in practice
 
@@ -209,7 +210,7 @@ $ pindrift scan --dedupe
     config    /repo/.mcp.json
 ```
 
-Pass `--dedupe` consistently to `pin`, `check`, `approve` and `watch`: the merged server keeps the first client as its id, so a baseline pinned without the flag will not match the deduped id. Adding a client that sorts earlier also renames that id, so keep dedupe opt-in until stable pin identity lands (see T3b in [`docs/TASKS.md`](docs/TASKS.md)).
+Pass `--dedupe` consistently to `pin`, `check`, `approve` and `watch`, and choose one mode per baseline. A deduped server keeps the id it was first pinned under, and the pin file records every `client:name` alias present when you pin or approve. Those aliases survive adding or removing a client; a client added after the last pin is matched by name until the next pin records its alias. A baseline pinned without the flag uses per-client ids and will not match the deduped id.
 
 ## Status
 

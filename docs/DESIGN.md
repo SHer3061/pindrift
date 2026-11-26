@@ -46,11 +46,17 @@ and has historically nested `command` as `{"path", "args", "env"}`; `_command_pa
 normalises that to the same `ServerSpec` every other client produces.
 
 `collect(dedupe=True)` groups specs by a launch key — name, transport, command, args,
-env keys, url and header keys. The first client alphabetically supplies the
-`server_id`; `clients` keeps every client so a report can name them all. Entries with
-the same name but a different launch are deliberately not merged: that difference is
-the drift this tool exists to show. The id is consequently sensitive to which clients
-are present; making it stable is T3b.
+env keys, url and header keys. The group's id is the id it was first pinned under;
+before the first pin it is the alphabetically first client, as before. Every
+`client:name` alias present at pin time is recorded, so a known client can be added or
+removed, and a launch can change, without renaming the server or its SARIF
+fingerprint. If every recorded alias is gone, an unambiguous pinned name is matched
+instead; two pinned servers sharing a name are never guessed between. A group with no
+known alias or name match that collides with another group of the same name gets a
+short launch-derived suffix, which is persisted with the pin; the suffix is never
+re-derived afterwards. `clients` keeps every client so a report can name them all.
+Entries with the same name but a different launch are deliberately not merged:
+that difference is the drift this tool exists to show.
 
 ## SARIF output
 
@@ -141,6 +147,12 @@ No database. The reasoning: the pin file is a trust anchor, and a trust anchor s
 small enough for a human to read. A SQLite file would hide the very data an incident
 reviewer needs to see.
 
+Pins are keyed by a canonical server id. An `aliases` object maps every `client:name`
+observed at pin time to that id; a pin key is also treated as an alias of itself, which
+is what keeps pin files written before aliases existed resolving to the same server.
+Both objects are part of the signed document, so an alias cannot be added or redirected
+without invalidating the signature.
+
 Environment values are never stored — only key names. Command-line arguments pass
 through `redact_arg` first.
 
@@ -185,9 +197,9 @@ the key, not *which* teammate. See [THREAT-MODEL.md](THREAT-MODEL.md#threat-mode
 * Continue's primary config is `~/.continue/config.yaml`. A YAML parser is not worth
   a runtime dependency, so only Continue's JSON forms are discovered; the YAML file is
   ignored rather than reported as broken.
-* A deduped server's id is the first client alphabetically, so adding a client that
-  sorts earlier renames it and orphans the old pin. Keep `--dedupe` opt-in until T3b
-  lands.
+* Two pinned servers that share a name cannot be told apart by the name fallback.
+  Remove the last recorded alias of one and its pin can still be orphaned; re-pin
+  after that change, or give distinct servers distinct names.
 * Manifest capture requires a working stdio handshake. Servers that require
   authentication before `tools/list` will report `unknown`.
 * `watch` polls. A host hook that checks immediately before each tool call is stronger

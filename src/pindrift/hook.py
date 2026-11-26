@@ -131,7 +131,8 @@ def _matching_specs(
     matches = [
         s
         for s in specs
-        if s.name == server_name and (client is None or s.client == client)
+        if s.name == server_name
+        and (client is None or client in s.all_clients)
     ]
     return sorted(matches, key=lambda s: s.server_id)
 
@@ -220,7 +221,13 @@ def evaluate(
         return Decision(EXIT_ALLOW)
 
     warnings: list[str] = []
-    specs, errors, _ = collect(include_project=include_project, root=payload.cwd)
+    baseline = store.load()
+    specs, errors, _ = collect(
+        include_project=include_project,
+        root=payload.cwd,
+        dedupe=True,
+        aliases=store.alias_map(baseline),
+    )
     for error in errors:
         warnings.append(f"config {error.client} {error.path}: {error.message}")
 

@@ -24,7 +24,6 @@ from .discover import ServerSpec, collect
 from .fingerprint import build
 from .hook import SUPPORTED_HOSTS, run_hook
 from .models import (
-    SEVERITY_RANK,
     Finding,
     ServerFingerprint,
     ServerResult,
@@ -50,11 +49,14 @@ def _now_label() -> str:
     return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
 
 
-def _load_specs(args: argparse.Namespace) -> list[ServerSpec]:
+def _load_specs(
+    args: argparse.Namespace, aliases: dict[str, str] | None = None
+) -> list[ServerSpec]:
     specs, errors, _ = collect(
         include_project=not getattr(args, "no_project", False),
         root=Path(getattr(args, "root", None) or Path.cwd()),
         dedupe=getattr(args, "dedupe", False),
+        aliases=aliases,
     )
     for error in errors:
         print(f"warning: {error.client} {error.path}: {error.message}", file=sys.stderr)
@@ -80,7 +82,11 @@ def _select(specs: list[ServerSpec], wanted: list[str]) -> list[ServerSpec]:
         return specs
     selected: list[ServerSpec] = []
     for token in wanted:
-        matches = [s for s in specs if s.server_id == token or s.name == token]
+        matches = [
+            s
+            for s in specs
+            if token in s.all_aliases or s.server_id == token or s.name == token
+        ]
         if not matches:
             matches = [s for s in specs if token.lower() in s.server_id.lower()]
         if not matches:
@@ -93,7 +99,7 @@ def _select(specs: list[ServerSpec], wanted: list[str]) -> list[ServerSpec]:
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
-    specs = _load_specs(args)
+    specs = _load_specs(args, store.alias_map(store.load()))
     fingerprints = [
         _fingerprint_spec(spec, do_probe=args.probe, timeout=args.timeout) for spec in specs
     ]
@@ -133,14 +139,8 @@ def _verified_baseline(path: Path) -> dict[str, object]:
 
 
 def cmd_pin(args: argparse.Namespace) -> int:
-    specs = _load_specs(args)
-    if not args.all:
-        specs = _select(specs, args.servers)
-    if not specs:
-        print("no MCP servers found to pin", file=sys.stderr)
-        return EXIT_USAGE
-
     target = Path(args.baseline).expanduser() if args.baseline else None
+    existing: dict[str, object] | None = None
     if target is not None:
         try:
             if trust.load_key() is None:
@@ -169,6 +169,17 @@ def cmd_pin(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
                 return EXIT_USAGE
+
+    if target is not None:
+        aliases = store.alias_map(existing) if existing is not None else {}
+    else:
+        aliases = store.alias_map(store.load())
+    specs = _load_specs(args, aliases)
+    if not args.all:
+        specs = _select(specs, args.servers)
+    if not specs:
+        print("no MCP servers found to pin", file=sys.stderr)
+        return EXIT_USAGE
 
     fingerprints = [
         _fingerprint_spec(spec, do_probe=not args.no_probe, timeout=args.timeout)
@@ -233,7 +244,7 @@ def _run_check(args: argparse.Namespace) -> tuple[list[ServerResult], int]:
         baseline = baseline_payload.get("updated_at") or "no baseline"
         baseline_label = f"baseline {baseline}"
 
-    specs = _load_specs(args)
+    specs = _load_specs(args, store.alias_map(baseline_payload))
     if args.servers:
         specs = _select(specs, args.servers)
 
@@ -281,7 +292,7 @@ def _run_check(args: argparse.Namespace) -> tuple[list[ServerResult], int]:
         f.severity
         for r in results
         for f in r.findings
-        if not (f.kind == "unpinned")
+        if f.kind != "unpinned"
     ]
     if worst and any(severity_at_least(s, threshold) for s in worst):
         return results, EXIT_FINDINGS
@@ -294,7 +305,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def cmd_approve(args: argparse.Namespace) -> int:
-    specs = _load_specs(args)
+    specs = _load_specs(args, store.alias_map(store.load()))
     if not args.all:
         specs = _select(specs, args.servers)
     if not specs:
@@ -320,7 +331,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
 
 
 def cmd_caps(args: argparse.Namespace) -> int:
-    specs = _load_specs(args)
+    specs = _load_specs(args, store.alias_map(store.load()))
     specs = _select(specs, args.servers)
     for spec in specs:
         fp = _fingerprint_spec(spec, do_probe=not args.no_probe, timeout=args.timeout)

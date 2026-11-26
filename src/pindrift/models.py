@@ -72,7 +72,7 @@ class ToolManifest:
     annotations: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_mcp(cls, payload: dict[str, Any]) -> "ToolManifest":
+    def from_mcp(cls, payload: dict[str, Any]) -> ToolManifest:
         schema = payload.get("inputSchema")
         annotations = payload.get("annotations")
         return cls(
@@ -118,7 +118,7 @@ class ToolManifest:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "ToolManifest":
+    def from_dict(cls, payload: dict[str, Any]) -> ToolManifest:
         return cls(
             name=str(payload.get("name") or ""),
             description=str(payload.get("description") or ""),
@@ -151,7 +151,7 @@ class Artifact:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "Artifact":
+    def from_dict(cls, payload: dict[str, Any]) -> Artifact:
         return cls(
             kind=str(payload.get("kind") or "unknown"),
             target=str(payload.get("target") or ""),
@@ -169,6 +169,7 @@ class ServerFingerprint:
     client: str
     name: str
     clients: list[str] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)
     transport: str = "unknown"  # stdio | http | sse | unknown
     command: str | None = None
     args: list[str] = field(default_factory=list)
@@ -185,6 +186,11 @@ class ServerFingerprint:
     def all_clients(self) -> list[str]:
         """Every client that configures this server, not only the primary one."""
         return list(self.clients) or [self.client]
+
+    @property
+    def all_aliases(self) -> list[str]:
+        """Every ``client:name`` this server was discovered under."""
+        return list(self.aliases) or [self.server_id]
 
     @property
     def tool_names(self) -> list[str]:
@@ -208,6 +214,7 @@ class ServerFingerprint:
             "client": self.client,
             "name": self.name,
             "clients": list(self.clients),
+            "aliases": list(self.aliases),
             "transport": self.transport,
             "command": self.command,
             "args": list(self.args),
@@ -222,7 +229,7 @@ class ServerFingerprint:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "ServerFingerprint":
+    def from_dict(cls, payload: dict[str, Any]) -> ServerFingerprint:
         tools_payload = payload.get("tools")
         tools = (
             [ToolManifest.from_dict(t) for t in tools_payload]
@@ -234,6 +241,7 @@ class ServerFingerprint:
             client=str(payload.get("client") or ""),
             name=str(payload.get("name") or ""),
             clients=[str(c) for c in (payload.get("clients") or [])],
+            aliases=[str(a) for a in (payload.get("aliases") or [])],
             transport=str(payload.get("transport") or "unknown"),
             command=payload.get("command"),
             args=[str(a) for a in (payload.get("args") or [])],

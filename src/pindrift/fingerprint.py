@@ -16,8 +16,6 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 from .discover import ServerSpec
@@ -191,6 +189,7 @@ def build(
         client=spec.client,
         name=spec.name,
         clients=spec.all_clients,
+        aliases=spec.all_aliases,
         transport=spec.transport,
         command=spec.command,
         args=spec.redacted_args,

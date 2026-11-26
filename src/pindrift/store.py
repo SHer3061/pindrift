@@ -39,7 +39,7 @@ def pins_path() -> Path:
 
 
 def _empty() -> dict[str, Any]:
-    return {"schema": SCHEMA_VERSION, "created_at": utc_now(), "pins": {}}
+    return {"schema": SCHEMA_VERSION, "created_at": utc_now(), "pins": {}, "aliases": {}}
 
 
 def load_path(path: Path) -> dict[str, Any]:
@@ -51,7 +51,8 @@ def load_path(path: Path) -> dict[str, Any]:
     """
     payload = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(payload, dict) or not isinstance(payload.get("pins"), dict):
-        raise ValueError("not a pindrift pin file (missing a 'pins' object)")
+        # Callers treat every invalid pin document the same way.
+        raise ValueError("not a pindrift pin file (missing a 'pins' object)")  # noqa: TRY004
     return payload
 
 
@@ -85,17 +86,15 @@ def save(payload: dict[str, Any], path: Path | None = None) -> Path:
     if signature is not None:
         payload["signature"] = signature
 
-    handle = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=str(path.parent), delete=False, suffix=".tmp"
-    )
-    try:
+    ) as handle:
+        temporary = handle.name
         json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
-    finally:
-        handle.close()
-    os.replace(handle.name, path)
+    os.replace(temporary, path)
     return path
 
 
@@ -115,6 +114,39 @@ def get(server_id: str, path: Path | None = None) -> ServerFingerprint | None:
 
 def pinned_ids(path: Path | None = None) -> set[str]:
     return set(load(path)["pins"].keys())
+
+
+def alias_map(payload: dict[str, Any]) -> dict[str, str]:
+    """Every known ``client:name`` alias and the canonical id it belongs to.
+
+    A pin key is always an alias of itself. That is the migration path for pin files
+    written before aliases existed: a server pinned as ``cursor:foo`` keeps that id
+    even when a client that sorts earlier appears beside it.
+    """
+    pins = payload.get("pins")
+    result: dict[str, str] = (
+        {str(key): str(key) for key in pins} if isinstance(pins, dict) else {}
+    )
+    stored = payload.get("aliases")
+    if isinstance(stored, dict):
+        for alias, canonical in stored.items():
+            alias = str(alias)
+            canonical = str(canonical)
+            # Ignore dangling mappings so removing a pin cannot resurrect it through
+            # an alias that still points at the old id.
+            if canonical in result:
+                result[alias] = canonical
+    return result
+
+
+def _remember_aliases(payload: dict[str, Any], fingerprint: ServerFingerprint) -> None:
+    stored = payload.get("aliases")
+    if not isinstance(stored, dict):
+        stored = {}
+        payload["aliases"] = stored
+    for alias in fingerprint.all_aliases:
+        if alias:
+            stored[alias] = fingerprint.server_id
 
 
 def _write_document(path: Path | None) -> dict[str, Any]:
@@ -137,6 +169,7 @@ def put(
         "reason": reason,
         "fingerprint": fingerprint.to_dict(),
     }
+    _remember_aliases(payload, fingerprint)
     return save(payload, path)
 
 
@@ -151,6 +184,7 @@ def put_many(
             "reason": reason,
             "fingerprint": fingerprint.to_dict(),
         }
+        _remember_aliases(payload, fingerprint)
     return save(payload, path)
 
 
@@ -159,6 +193,10 @@ def drop(server_id: str) -> bool:
     if server_id not in payload["pins"]:
         return False
     del payload["pins"][server_id]
+    stored = payload.get("aliases")
+    if isinstance(stored, dict):
+        for alias in [a for a, target in stored.items() if str(target) == server_id]:
+            del stored[alias]
     save(payload)
     return True
 
